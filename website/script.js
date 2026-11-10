@@ -258,6 +258,7 @@ document.querySelector('#format-text').addEventListener('click', () => showToast
 document.querySelector('#add-checklist').addEventListener('click', () => addCanvasCard('A little checklist', '☐ Make a note\n☐ Add one more thought'));
 document.querySelector('#add-table').addEventListener('click', () => addCanvasCard('A small table', 'Idea         | Next step\nOne thought | Let it grow'));
 document.querySelector('#attach-file').addEventListener('click', () => showToast('Attachments can live right on a canvas card.'));
+document.querySelector('#import-notes').addEventListener('click', () => showToast('Import from Apple Notes is available in Notesy for Mac. Your originals stay in Apple Notes.'));
 document.querySelector('#share-note').addEventListener('click', () => showToast('Your note is ready to share from Notesy.'));
 window.addEventListener('resize', () => {
   renderArrows();

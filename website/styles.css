@@ -21,3 +21,15 @@ body.dark{--paper:#262623;--ink:#f2f0e9;--line:#44433e}.dark .topbar{background:
 .toolbar-reveal{display:none;position:absolute;right:14px;top:10px;z-index:4;border:1px solid #fff;border-radius:14px;padding:8px 12px;background:rgba(255,255,255,.82);box-shadow:0 4px 14px #443d2c16;font-size:9px}.toolbar-collapsed .toolbar-reveal{display:block}
 .canvas-instruction{position:absolute;z-index:2;top:10px;right:12px;border-radius:11px;padding:7px 10px;color:#817c73;font-size:8px;box-shadow:0 4px 13px #40372310;pointer-events:none}.canvas-instruction kbd{font:600 9px 'DM Sans',sans-serif;color:#645d50;border:1px solid #ddd7cc;background:#fff9;padding:1px 4px;border-radius:4px}.free-arrow{fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;color:#898074;pointer-events:none}.canvas-panel.arrow-mode{cursor:crosshair}.canvas-panel.arrow-mode .canvas-card,.canvas-panel.arrow-mode .canvas-card *{cursor:crosshair}.tool-button.active{background:#fff3cc;border-color:#f0cf88;box-shadow:0 0 0 2px #f0cf8840}.dark-demo .canvas-instruction{background:rgba(65,64,58,.82);border-color:#5b5952;color:#e0dcd2}.dark-demo .canvas-instruction kbd{background:#4c4a43;color:#f2eee4;border-color:#6a665b}.dark-demo .free-arrow{color:#d2c6b2}
 .sidebar{grid-column:1;grid-row:1}.note-list{grid-column:2;grid-row:1}.canvas-panel,.text-panel{grid-column:3;grid-row:1}
+.feature-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.import-visual{background:linear-gradient(145deg,#f1eee7,#e9e5dc)}
+.import-window{width:68%;max-width:210px;padding:12px 14px 19px;border-radius:16px;display:flex;flex-direction:column;align-items:center;gap:7px;color:#55524b}
+.import-window-top{width:100%;display:flex;align-items:center;gap:4px;margin-bottom:5px}
+.import-window-top i{width:6px;height:6px;border-radius:50%;background:#f2776f}
+.import-window-top i:nth-child(2){background:#f3c043}.import-window-top i:nth-child(3){background:#68c54b}
+.import-window-top span{margin:auto;font-size:8px;color:#8e8a82}
+.import-glyph{width:52px;height:52px;border-radius:16px;background:#fff9d9;display:grid;place-items:center;color:#c38a33}
+.import-glyph svg{width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.import-window strong{font:600 12px Manrope,sans-serif}.import-window>span{font-size:8px;color:#8e8a82}
+@media(max-width:1020px){.feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.feature-grid{grid-template-columns:1fr}}
