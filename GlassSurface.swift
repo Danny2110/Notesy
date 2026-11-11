@@ -147,12 +147,23 @@ final class AmbientBackdropView: NSView {
 
     var tone: Tone = .chrome { didSet { needsDisplay = true } }
 
+    /// Theme accent blended into both ends of the ramp, so the surface behind
+    /// the glass carries the theme instead of staying neutral gray.
+    var accent: NSColor? { didSet { needsDisplay = true } }
+
+    /// The gradient is computed from the live appearance, so a light/dark
+    /// switch has to repaint it; nothing else invalidates this view.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override var isOpaque: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
         let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let top: NSColor
-        let bottom: NSColor
+        var top: NSColor
+        var bottom: NSColor
         switch (tone, isDark) {
         case (.chrome, false): top = NSColor(srgbRed: 0.973, green: 0.965, blue: 0.945, alpha: 1)
                                bottom = NSColor(srgbRed: 0.902, green: 0.890, blue: 0.867, alpha: 1)
@@ -162,6 +173,11 @@ final class AmbientBackdropView: NSView {
                                bottom = NSColor(srgbRed: 0.949, green: 0.933, blue: 0.902, alpha: 1)
         case (.paper, true):   top = NSColor(srgbRed: 0.125, green: 0.122, blue: 0.118, alpha: 1)
                                bottom = NSColor(srgbRed: 0.086, green: 0.084, blue: 0.082, alpha: 1)
+        }
+        if let accent {
+            let strength: CGFloat = isDark ? 0.18 : 0.12
+            top = Self.blend(top, toward: accent, strength)
+            bottom = Self.blend(bottom, toward: accent, strength * 0.6)
         }
         NSGradient(starting: top, ending: bottom)?.draw(in: bounds, angle: -90)
 
@@ -174,6 +190,16 @@ final class AmbientBackdropView: NSView {
             toCenter: NSPoint(x: bounds.minX + bounds.width * 0.28, y: bounds.minY + bounds.height * 0.1),
             radius: max(bounds.width, bounds.height) * 0.75,
             options: [])
+    }
+
+    private static func blend(_ base: NSColor, toward tint: NSColor, _ amount: CGFloat) -> NSColor {
+        guard let b = base.usingColorSpace(.sRGB), let t = tint.usingColorSpace(.sRGB) else { return base }
+        return NSColor(
+            srgbRed: b.redComponent + (t.redComponent - b.redComponent) * amount,
+            green: b.greenComponent + (t.greenComponent - b.greenComponent) * amount,
+            blue: b.blueComponent + (t.blueComponent - b.blueComponent) * amount,
+            alpha: 1
+        )
     }
 }
 
