@@ -10,11 +10,17 @@ private struct WorkspaceNote: Codable, Identifiable {
     var canvasBlocks: [NoteBlock] = []
     var connections: [NoteConnection] = []
     var attachments: [Attachment] = []
+    /// Identifier of the Apple Notes note this was imported from, if any.
+    /// Used to make repeated imports idempotent.
+    var sourceID: String? = nil
 
-    private enum CodingKeys: String, CodingKey { case id, title, body, folder, modified, isCanvas, canvasBlocks, connections, attachments }
+    private enum CodingKeys: String, CodingKey {
+        case id, title, body, folder, modified, isCanvas, canvasBlocks, connections, attachments, sourceID
+    }
 
     init(id: UUID = UUID(), title: String, body: String, folder: String, modified: Date = Date(), isCanvas: Bool = false,
-         canvasBlocks: [NoteBlock] = [], connections: [NoteConnection] = [], attachments: [Attachment] = []) {
+         canvasBlocks: [NoteBlock] = [], connections: [NoteConnection] = [], attachments: [Attachment] = [],
+         sourceID: String? = nil) {
         self.id = id
         self.title = title
         self.body = body
@@ -24,6 +30,7 @@ private struct WorkspaceNote: Codable, Identifiable {
         self.canvasBlocks = canvasBlocks
         self.connections = connections
         self.attachments = attachments
+        self.sourceID = sourceID
     }
 
     init(from decoder: Decoder) throws {
@@ -36,7 +43,37 @@ private struct WorkspaceNote: Codable, Identifiable {
         isCanvas = try values.decodeIfPresent(Bool.self, forKey: .isCanvas) ?? false
         canvasBlocks = try values.decodeIfPresent([NoteBlock].self, forKey: .canvasBlocks) ?? []
         connections = try values.decodeIfPresent([NoteConnection].self, forKey: .connections) ?? []
+        // Synthesized `Encodable` has always written attachments; without this
+        // decode they were dropped on every load.
+        attachments = try values.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
+        sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
     }
+
+    /// Explicit, because relying on the synthesized encoder left `attachments`
+    /// and `sourceID` out of the store: the custom `init(from:)` made the
+    /// synthesis conservative, so imported notes came back without their
+    /// Apple Notes id and every re-import duplicated all 257.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(body, forKey: .body)
+        try container.encode(folder, forKey: .folder)
+        try container.encode(modified, forKey: .modified)
+        try container.encode(isCanvas, forKey: .isCanvas)
+        try container.encode(canvasBlocks, forKey: .canvasBlocks)
+        try container.encode(connections, forKey: .connections)
+        try container.encode(attachments, forKey: .attachments)
+        try container.encodeIfPresent(sourceID, forKey: .sourceID)
+    }
+}
+
+/// Outcome of one Apple Notes import pass, for the completion alert.
+struct AppleNotesImportSummary {
+    let imported: Int
+    let updated: Int
+    let skipped: Int
+    let folders: Int
 }
 
 /// File attachment for text notes
@@ -61,12 +98,34 @@ struct Attachment: Codable, Identifiable {
 final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate, NSTextFieldDelegate {
     var onOpenSettings: (() -> Void)?
     
+    /// Chosen theme. Only the ID is stored; the palette is resolved on demand
+    /// for the appearance in effect, so a dark palette can never end up in a
+    /// light window (or the reverse).
+    private var themeID: ThemeID = UserDefaults.standard.selectedThemeID ?? .amber
+    private var theme: NotesyTheme { themeForID(themeID).resolved(for: effectiveAppearance) }
+
+    /// True once `init` has finished wiring the view tree. Appearance
+    /// notifications can arrive while the view is being attached to a window,
+    /// before the subviews exist; syncing then would touch nil layers.
+    private var isConfigured = false
+
+    /// Update the theme and sync colors
+    func setTheme(_ newThemeID: ThemeID) {
+        themeID = newThemeID
+        syncThemeColors()
+    }
+    
     private var notes: [WorkspaceNote] = [] { didSet { save() } }
     private var folders: [String] = ["Notes"] { didSet { save() } }
     private var selectedFolder = "Notes"
     private var selectedNoteID: UUID?
     private var canvasViews: [UUID: WorkspaceScrollView] = [:]
     private var canvasControlButtons: [NSButton] = []
+    private var canvasControlSurfaces: [GlassSurfaceView] = []
+    private var toolbarButtonSurfaces: [ObjectIdentifier: GlassSurfaceView] = [:]
+    private var leftToolbarButtons: [NSButton] = []
+    private var formattingToolbarButtons: [NSButton] = []
+    private var rightToolbarButtons: [NSButton] = []
     private var query = ""
     private var showsSidebar = true
     private var showsNotesList = true
@@ -76,13 +135,22 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// a no-op then, otherwise the first `didSet` writes an empty store back
     /// over the file we just read.
     private var isRestoring = false
+    /// True while a bulk merge is assigning `notes` / `folders`. Suppresses the
+    /// `didSet` saves so one import writes the store once, not per note.
+    private var isBatchingSave = false
+    private var isImportingNotes = false
+    private var importProgressAlert: NSAlert?
 
     /// Ambient gradient behind every piece of chrome; gives the glass something to refract.
     private let backdrop = AmbientBackdropView()
     private lazy var toolbarGlass = GlassSurfaceView.bar(cornerRadius: 22)
     private lazy var sidebarGlass = GlassSurfaceView.panel(cornerRadius: 22)
     private let toolbarContent = NSView()
-    private let folderStack = NSStackView()
+    /// Plain flipped container: folder rows are positioned by frame so the
+    /// glass rows never fight AppKit's own constraints inside `NSStackView`.
+    private let folderStack = FlippedStackView()
+    /// Live folder row surfaces, top to bottom, used for frame layout.
+    private var folderRows: [NSView] = []
     private let folderScroll = NSScrollView()
     private let notesTable = NSTableView()
     private let notesScroll = NSScrollView()
@@ -112,8 +180,17 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     /// text field is finishing its edit.
     private var isSelectingNote = false
 
-    private var visibleNotes: [WorkspaceNote] {        notes.filter { note in
-            let inFolder = selectedFolder == "All iCloud" || (selectedFolder == "Canvas" ? note.isCanvas : note.folder == selectedFolder)
+    private var visibleNotes: [WorkspaceNote] {
+        notes.filter { note in
+            let inFolder: Bool
+            if selectedFolder == "All iCloud" {
+                inFolder = true
+            } else if selectedFolder == "Canvas" {
+                inFolder = note.isCanvas
+            } else {
+                // A folder shows everything nested beneath it as well.
+                inFolder = note.folder == selectedFolder || note.folder.hasPrefix(selectedFolder + "/")
+            }
             let matches = query.isEmpty || note.title.localizedCaseInsensitiveContains(query) || note.body.localizedCaseInsensitiveContains(query)
             return inFolder && matches
         }.sorted { $0.modified > $1.modified }
@@ -155,9 +232,20 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         notesTable.reloadData()
         if let first = visibleNotes.first { selectNote(first.id) }
         else { showEmptyEditor() }
-        
+
+        // Apply theme colors after setup
+        isConfigured = true
+        syncThemeColors()
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
+
+    /// A light/dark switch has to repaint every themed surface, not just the
+    /// ones AppKit names as dynamic colors.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        guard isConfigured else { return }
+        syncThemeColors()
+    }
 
     override func layout() {
         super.layout()
@@ -184,7 +272,8 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         sidebarGlass.frame = NSRect(x: 8, y: sidebarTop, width: 232, height: max(0, bounds.height - sidebarTop - 8))
         folderScroll.frame = sidebarGlass.bounds
         folderStack.frame = NSRect(x: 0, y: 0, width: max(0, sidebarGlass.bounds.width),
-                                   height: max(sidebarGlass.bounds.height, CGFloat(folderStack.arrangedSubviews.count) * 38 + 24))
+                                   height: max(sidebarGlass.bounds.height, CGFloat(folderRows.count) * 40 + 22))
+        layoutFolderRows()
 
         // Notes list panel (middle) - can be hidden
         let listTop: CGFloat = showsToolbar ? 68 : 12
@@ -214,33 +303,30 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         layoutHUD()
     }
 
-    func importNote(title: String, body: String) {
-        let destinationFolder = selectedFolder == "Canvas" || selectedFolder == "All iCloud" ? "Notes" : selectedFolder
-        let note = WorkspaceNote(title: title, body: body, folder: destinationFolder)
-        notes.append(note)
-        notesTable.reloadData()
-        selectNote(note.id)
-    }
-
     private func configureToolbar() {
         toolbarGlass.contentView = toolbarContent
 
         // Left group: sidebar, new folder, folder header, more
-        addGlassToolbarButton("sidebar.left", help: "Show or hide folders", action: #selector(toggleSidebar))
-        addGlassToolbarButton("folder.badge.plus", help: "New Folder", action: #selector(newFolder))
+        leftToolbarButtons = [
+            addGlassToolbarButton("sidebar.left", help: "Show or hide folders", action: #selector(toggleSidebar)),
+            addGlassToolbarButton("folder.badge.plus", help: "New Folder", action: #selector(newFolder))
+        ]
         folderHeader.font = .systemFont(ofSize: 15, weight: .semibold)
         toolbarContent.addSubview(folderHeader)
-        addGlassToolbarButton("ellipsis", help: "More folder actions", action: #selector(openFolderActions))
+        leftToolbarButtons.append(addGlassToolbarButton("ellipsis", help: "More folder actions", action: #selector(openFolderActions)))
         newNoteButton = addGlassToolbarButton("square.and.pencil", help: "New Note", action: #selector(newNote))
 
         let flexible = NSView()
         toolbarContent.addSubview(flexible)
 
         // Center group: formatting
-        addGlassToolbarButton("textformat", help: "Text formatting", action: #selector(formatMenu))
-        addGlassToolbarButton("checklist", help: "Insert checklist item", action: #selector(insertChecklist))
-        addGlassToolbarButton("tablecells", help: "Insert table", action: #selector(insertTable))
-        addGlassToolbarButton("paperclip", help: "Attach a file", action: #selector(attachFile))
+        formattingToolbarButtons = [
+            addGlassToolbarButton("textformat", help: "Text formatting", action: #selector(formatMenu)),
+            addGlassToolbarButton("checklist", help: "Insert checklist item", action: #selector(insertChecklist)),
+            addGlassToolbarButton("tablecells", help: "Insert table", action: #selector(insertTable)),
+            addGlassToolbarButton("paperclip", help: "Attach a file", action: #selector(attachFile)),
+            addGlassToolbarButton("arrow.down.doc", help: "Import Apple Notes", action: #selector(importAppleNotes))
+        ]
 
         // Canvas controls
         canvasControlButtons = [
@@ -249,12 +335,15 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
             addGlassToolbarButton("minus.magnifyingglass", help: "Zoom out", action: #selector(zoomCanvasOut)),
             addGlassToolbarButton("plus.magnifyingglass", help: "Zoom in", action: #selector(zoomCanvasIn))
         ]
+        canvasControlSurfaces = canvasControlButtons.compactMap(toolbarSurface(for:))
 
         // Right group: share, delete, settings
-        addGlassToolbarButton("square.and.arrow.up", help: "Share note", action: #selector(shareNote))
-        addGlassToolbarButton("trash", help: "Delete note", action: #selector(deleteSelectedNote))
-        addGlassToolbarButton("menubar.rectangle", help: "Show or hide toolbar", action: #selector(toggleToolbar))
-        addGlassToolbarButton("gearshape", help: "Settings", action: #selector(showSettings))
+        rightToolbarButtons = [
+            addGlassToolbarButton("square.and.arrow.up", help: "Share note", action: #selector(shareNote)),
+            addGlassToolbarButton("trash", help: "Delete note", action: #selector(deleteSelectedNote)),
+            addGlassToolbarButton("menubar.rectangle", help: "Show or hide toolbar", action: #selector(toggleToolbar)),
+            addGlassToolbarButton("gearshape", help: "Settings", action: #selector(showSettings))
+        ]
 
         searchField.placeholderString = "Search"
         searchField.target = self
@@ -294,6 +383,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         button.contentTintColor = .labelColor
         button.imageScaling = .scaleProportionallyDown
         glass.contentView = button
+        toolbarButtonSurfaces[ObjectIdentifier(button)] = glass
 
         // Set fixed size for glass and button - layoutToolbar will position them.
         // The button fills the whole glass so the entire circle is clickable.
@@ -314,20 +404,18 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         let gap: CGFloat = 6
         let buttonY = (bar.height - side) / 2
 
-        let allGlass = toolbarContent.subviews.compactMap { $0 as? GlassSurfaceView }
-        let leftGlass = Array(allGlass.prefix(3))
-        let newNoteGlass = newNoteButton.superview as? GlassSurfaceView
-        let canvasGlass = canvasControlButtons.compactMap { $0.superview as? GlassSurfaceView }
-        let canvasSet = Set(canvasGlass)
-        let otherGlass = allGlass.filter { !leftGlass.contains($0) && $0 !== newNoteGlass && !canvasSet.contains($0) }
-        let centerGlass = Array(otherGlass.prefix(4))
-        let rightGlass = Array(otherGlass.dropFirst(4))
+        let leftGlass = leftToolbarButtons.compactMap(toolbarSurface(for:))
+        let newNoteGlass = toolbarSurface(for: newNoteButton)
+        let canvasGlass = canvasControlSurfaces.filter { !$0.isHidden }
+        let centerGlass = formattingToolbarButtons.compactMap(toolbarSurface(for:))
+        let rightGlass = rightToolbarButtons.compactMap(toolbarSurface(for:))
 
         let searchWidth: CGFloat = min(280, max(180, bounds.width * 0.18))
         searchField.frame = NSRect(x: bar.width - searchWidth - 14, y: (bar.height - 36) / 2,
                                    width: searchWidth, height: 36)
 
-        // Right edge -> left: search, right group, canvas controls, center group.
+        // Right edge -> left: search, actions, canvas controls, formatting,
+        // then New Note. Keep every note action in one right-aligned cluster.
         var x = searchField.frame.minX - gap
         for glass in rightGlass.reversed() {
             x -= side
@@ -339,43 +427,45 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
             glass.frame = NSRect(x: x, y: buttonY, width: side, height: side)
             x -= gap
         }
-        let centerEndX = x
         for glass in centerGlass.reversed() {
             x -= side
             glass.frame = NSRect(x: x, y: buttonY, width: side, height: side)
             x -= gap
         }
+        if let newNoteGlass {
+            x -= side
+            newNoteGlass.frame = NSRect(x: x, y: buttonY, width: side, height: side)
+            x -= gap
+        }
 
-        // Left edge -> right: sidebar, new folder, ellipsis, folder header, new note.
+        // Left edge -> right: sidebar, new folder, ellipsis, folder header.
         var lx: CGFloat = 18 - bar.minX
         for glass in leftGlass {
             glass.frame = NSRect(x: lx, y: buttonY, width: side, height: side)
             lx += side + gap
         }
         folderHeader.frame = NSRect(x: lx + 2, y: (bar.height - 24) / 2, width: 150, height: 24)
-        lx += 150 + gap
-        if let newNoteGlass {
-            newNoteGlass.frame = NSRect(x: lx, y: buttonY, width: side, height: side)
-            lx += side + gap
-        }
 
         let flexible = toolbarContent.subviews.first(where: { !($0 is GlassSurfaceView) && $0 !== folderHeader && $0 !== searchField })
         if let flexible {
-            flexible.frame = NSRect(x: lx + 8, y: 0, width: max(8, centerEndX - lx - 16), height: 1)
+            let leftContentEnd = folderHeader.frame.maxX
+            let rightControlsStart = x + gap
+            flexible.frame = NSRect(x: leftContentEnd + 8, y: 0,
+                                    width: max(8, rightControlsStart - leftContentEnd - 16), height: 1)
         }
+    }
+
+    private func toolbarSurface(for button: NSButton) -> GlassSurfaceView? {
+        toolbarButtonSurfaces[ObjectIdentifier(button)]
     }
 
     private func configureSidebar() {
         folderScroll.drawsBackground = false
         folderScroll.hasVerticalScroller = true
         folderScroll.autoresizingMask = [.width, .height]
-        folderStack.orientation = .vertical
-        folderStack.alignment = .leading
-        folderStack.spacing = 4
-        folderStack.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 12, right: 10)
         folderScroll.documentView = folderStack
         sidebarGlass.contentView = folderScroll
-        folderHeader.stringValue = selectedFolder
+        folderHeader.stringValue = folderDisplayName(selectedFolder)
     }
 
     private func configureNotesList() {
@@ -460,68 +550,100 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         zoomLabel.frame = NSRect(x: side + 4, y: 3, width: zoomHUD.bounds.width - side * 2 - 8, height: side)
     }
 
+    /// Pseudo folders that are not stored in `folders` and cannot be renamed,
+    /// deleted, or used as a subfolder parent.
+    private static let reservedFolders: Set<String> = ["Notes", "Quick Notes", "All iCloud", "Canvas"]
+
+    /// Sidebar/toolbar label for a folder path: the last component, not the
+    /// whole "LUOA/Science" path.
+    private func folderDisplayName(_ path: String) -> String {
+        guard let last = path.components(separatedBy: "/").last, !last.isEmpty else { return path }
+        return last
+    }
+
+    /// True for a folder the user owns: a stored folder that isn't a pseudo row.
+    private func isUserFolder(_ path: String) -> Bool {
+        !Self.reservedFolders.contains(path) && folders.contains(path)
+    }
+
+    /// True when notes can live directly in this selection ("Notes" included).
+    private func canHoldNotes(_ path: String) -> Bool {
+        !["Quick Notes", "All iCloud", "Canvas"].contains(path)
+    }
+
+    private func folderIsSelectedOrNested(_ folder: String, in path: String) -> Bool {
+        folder == path || folder.hasPrefix(path + "/")
+    }
+
     private func rebuildFolderRows() {
-        folderStack.setViews([], in: .top)
+        for row in folderRows {
+            row.removeFromSuperview()
+        }
+        folderRows.removeAll()
         addFolderRow("Quick Notes", symbol: "bolt.fill", count: nil, folder: "Quick Notes")
         addFolderRow("All iCloud", symbol: "folder", count: nil, folder: "All iCloud")
         addFolderRow("Notes", symbol: "folder", count: nil, folder: "Notes")
-        for folder in folders where !["Notes", "Quick Notes"].contains(folder) {
-            addFolderRow(folder, symbol: "folder", count: nil, folder: folder)
+
+        // Full paths, so ancestors sort ahead of their children and a child
+        // whose parent is missing still shows up (indented, not hidden).
+        let otherFolders = folders
+            .filter { !Self.reservedFolders.contains($0) }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        for folder in otherFolders {
+            let depth = min(4, max(0, folder.components(separatedBy: "/").count - 1))
+            addFolderRow(folderDisplayName(folder), symbol: "folder", count: nil, folder: folder, indent: CGFloat(depth) * 12)
         }
         addFolderRow("Canvas", symbol: "scribble.variable", count: nil, folder: "Canvas")
+        layoutFolderRows()
     }
 
-    private func addFolderRow(_ title: String, symbol: String, count: Int?, folder: String) {
+    /// Positions every folder row from the sidebar's current width. Frame-based
+    /// on purpose: Auto Layout here fought `NSGlassEffectView`'s internal
+    /// content constraints and flooded the console.
+    private func layoutFolderRows() {
+        let width = max(0, folderStack.bounds.width - 20)
+        var y: CGFloat = 10
+        for row in folderRows {
+            row.frame = NSRect(x: 10, y: y, width: width, height: 36)
+            y += 40
+        }
+    }
+
+    private func addFolderRow(_ title: String, symbol: String, count: Int?, folder: String, indent: CGFloat = 0) {
         let isSelected = folder == selectedFolder
-        
+        let effectiveTheme = theme
+
         // Create glass surface for the folder row
         let glass = GlassSurfaceView.control(cornerRadius: 12)
-        glass.isInteractive = true
         glass.style = .clear
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        folderStack.addArrangedSubview(glass)
-        
+        glass.tintColor = isSelected ? effectiveTheme.selectionHighlight : nil
+        glass.frame = NSRect(x: 10, y: CGFloat(folderRows.count) * 40 + 10, width: 212, height: 36)
+        folderStack.addSubview(glass)
+        folderRows.append(glass)
+
         let button = NSButton(title: title, target: self, action: #selector(folderSelected(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(folder)
         button.isBordered = false
         button.alignment = .left
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         button.imagePosition = .imageLeading
-        button.font = .systemFont(ofSize: 13, weight: isSelected ? .semibold : .regular)
-        button.contentTintColor = isSelected ? NSColor(srgbRed: 0.98, green: 0.72, blue: 0.32, alpha: 1) : .labelColor
-        button.translatesAutoresizingMaskIntoConstraints = false
-        glass.contentView = button
-        
-        // Selection pill with cozy warm color inside the glass
-        let cozyColor = NSColor(srgbRed: 0.98, green: 0.72, blue: 0.32, alpha: 1)
-        if isSelected {
-            let pill = NSView()
-            pill.wantsLayer = true
-            pill.layer?.backgroundColor = cozyColor.withAlphaComponent(0.3).cgColor
-            pill.layer?.cornerRadius = 8
-            pill.translatesAutoresizingMaskIntoConstraints = false
-            glass.addSubview(pill, positioned: .below, relativeTo: button)
-            NSLayoutConstraint.activate([
-                pill.leadingAnchor.constraint(equalTo: glass.leadingAnchor, constant: 4),
-                pill.trailingAnchor.constraint(equalTo: glass.trailingAnchor, constant: -4),
-                pill.topAnchor.constraint(equalTo: glass.topAnchor, constant: 2),
-                pill.bottomAnchor.constraint(equalTo: glass.bottomAnchor, constant: -2)
-            ])
-        }
-        
-        NSLayoutConstraint.activate([
-            glass.widthAnchor.constraint(equalToConstant: 212),
-            glass.heightAnchor.constraint(equalToConstant: 36),
-            button.leadingAnchor.constraint(equalTo: glass.leadingAnchor, constant: 12),
-            button.trailingAnchor.constraint(equalTo: glass.trailingAnchor, constant: -12),
-            button.centerYAnchor.constraint(equalTo: glass.centerYAnchor),
-        ])
+        button.contentTintColor = isSelected ? effectiveTheme.accentColor : effectiveTheme.textPrimary
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .foregroundColor: isSelected ? effectiveTheme.accentColor : effectiveTheme.textPrimary,
+                .font: NSFont.systemFont(ofSize: 13, weight: isSelected ? .semibold : .regular)
+            ]
+        )
+        // The content view insets the button by frame; no constraints.
+        let row = FolderRowContentView(button: button, leadingInset: 12 + indent)
+        glass.contentView = row
     }
 
     @objc private func folderSelected(_ sender: NSButton) {
         guard let folder = sender.identifier?.rawValue else { return }
         selectedFolder = folder
-        folderHeader.stringValue = folder
+        folderHeader.stringValue = folderDisplayName(folder)
         rebuildFolderRows()
         notesTable.reloadData()
         if let first = visibleNotes.first { selectNote(first.id) } else { showEmptyEditor() }
@@ -539,58 +661,134 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         alert.accessoryView = input
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !folders.contains(name) else { return }
+        guard !name.isEmpty, !name.contains("/"), !Self.reservedFolders.contains(name),
+              !folders.contains(name) else { return }
         folders.append(name)
         selectedFolder = name
-        folderHeader.stringValue = name
+        folderHeader.stringValue = folderDisplayName(name)
         rebuildFolderRows()
         notesTable.reloadData()
         showEmptyEditor()
     }
 
+    /// Creates `selectedFolder/Name` inside the folder currently selected.
+    @objc private func newSubfolder() {
+        let parent = selectedFolder
+        guard canHoldNotes(parent) else { return }
+        promptForFolderName(initial: "", title: "New Subfolder") { [weak self] name in
+            guard let self, let name, !name.isEmpty else { return }
+            guard !name.contains("/") else { NSSound.beep(); return }
+            let path = "\(parent)/\(name)"
+            guard !self.folders.contains(path) else { NSSound.beep(); return }
+            self.folders.append(path)
+            self.selectedFolder = path
+            self.folderHeader.stringValue = self.folderDisplayName(path)
+            self.rebuildFolderRows()
+            self.notesTable.reloadData()
+            self.showEmptyEditor()
+        }
+    }
+
     @objc private func openFolderActions() {
         let menu = NSMenu()
+        // Explicit enablement below, so AppKit does not re-enable items with a
+        // valid target/action when the menu opens.
+        menu.autoenablesItems = false
+        let subfolder = NSMenuItem(title: "New Subfolder…", action: #selector(newSubfolder), keyEquivalent: "")
+        subfolder.target = self
+        subfolder.isEnabled = canHoldNotes(selectedFolder)
+        menu.addItem(subfolder)
         let rename = NSMenuItem(title: "Rename Folder…", action: #selector(renameSelectedFolder), keyEquivalent: "")
         rename.target = self
+        rename.isEnabled = folders.contains(selectedFolder)
         menu.addItem(rename)
         let remove = NSMenuItem(title: "Delete Folder", action: #selector(deleteSelectedFolder), keyEquivalent: "")
         remove.target = self
-        remove.isEnabled = selectedFolder != "Notes" && selectedFolder != "Quick Notes" && selectedFolder != "All iCloud" && selectedFolder != "Canvas"
+        remove.isEnabled = isUserFolder(selectedFolder)
         menu.addItem(remove)
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: toolbarContent)
     }
 
     @objc private func renameSelectedFolder() {
-        guard let index = folders.firstIndex(of: selectedFolder) else { return }
-        promptForFolderName(initial: selectedFolder) { [weak self] name in
+        let old = selectedFolder
+        guard folders.contains(old) else { return }
+        let parent = old.components(separatedBy: "/").dropLast().joined(separator: "/")
+        promptForFolderName(initial: folderDisplayName(old)) { [weak self] name in
             guard let self, let name, !name.isEmpty else { return }
-            let old = self.folders[index]
-            self.folders[index] = name
-            self.notes = self.notes.map { note in var copy = note; if copy.folder == old { copy.folder = name }; return copy }
-            self.selectedFolder = name
-            self.folderHeader.stringValue = name
+            guard !name.contains("/") else { NSSound.beep(); return }
+            let new = parent.isEmpty ? name : "\(parent)/\(name)"
+            guard new != old else { return }
+            // A root folder named like a sidebar pseudo row would be shadowed
+            // by it, so it is rejected up front.
+            guard !(parent.isEmpty && Self.reservedFolders.contains(new)) else { NSSound.beep(); return }
+            // Reject a name already taken by another folder, including one of
+            // its descendants; a folder being renamed out of the way is fine.
+            let collides = self.folders.contains { candidate in
+                guard self.folderIsSelectedOrNested(candidate, in: new) else { return false }
+                return !self.folderIsSelectedOrNested(candidate, in: old)
+            }
+            guard !collides else { NSSound.beep(); return }
+
+            self.folders = self.folders.map { folder in
+                if folder == old { return new }
+                if folder.hasPrefix(old + "/") { return new + String(folder.dropFirst(old.count)) }
+                return folder
+            }
+            self.notes = self.notes.map { note in
+                var copy = note
+                if note.folder == old {
+                    copy.folder = new
+                } else if note.folder.hasPrefix(old + "/") {
+                    copy.folder = new + String(note.folder.dropFirst(old.count))
+                }
+                return copy
+            }
+            self.selectedFolder = new
+            self.folderHeader.stringValue = self.folderDisplayName(new)
             self.rebuildFolderRows()
             self.notesTable.reloadData()
+            self.reselectVisibleNote()
         }
     }
 
     @objc private func deleteSelectedFolder() {
-        guard let index = folders.firstIndex(of: selectedFolder), selectedFolder != "Notes" else { return }
-        let deleted = folders.remove(at: index)
-        notes = notes.map { note in var copy = note; if copy.folder == deleted { copy.folder = "Notes" }; return copy }
+        let removed = selectedFolder
+        guard isUserFolder(removed) else { return }
+        folders.removeAll { folderIsSelectedOrNested($0, in: removed) }
+        notes = notes.map { note in
+            var copy = note
+            if folderIsSelectedOrNested(note.folder, in: removed) { copy.folder = "Notes" }
+            return copy
+        }
         selectedFolder = "Notes"
-        folderHeader.stringValue = selectedFolder
+        folderHeader.stringValue = folderDisplayName(selectedFolder)
         rebuildFolderRows()
         notesTable.reloadData()
+        reselectVisibleNote()
     }
 
-    private func promptForFolderName(initial: String, completion: @escaping (String?) -> Void) {
+    /// Keeps the current note selected when it is still visible, otherwise
+    /// falls back to the first visible note or an empty editor.
+    private func reselectVisibleNote() {
+        let visible = visibleNotes
+        if let selectedNoteID, visible.contains(where: { $0.id == selectedNoteID }) {
+            selectNote(selectedNoteID)
+        } else if let first = visible.first {
+            selectNote(first.id)
+        } else {
+            showEmptyEditor()
+        }
+    }
+
+    private func promptForFolderName(initial: String, title: String = "Rename Folder",
+                                     completion: @escaping (String?) -> Void) {
         let alert = NSAlert()
-        alert.messageText = "Rename Folder"
+        alert.messageText = title
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(string: initial)
         field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        field.placeholderString = "Folder name"
         alert.accessoryView = field
         completion(alert.runModal() == .alertFirstButtonReturn ? field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) : nil)
     }
@@ -610,7 +808,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     @objc private func createNormalNote() { createNote() }
 
     func createNote() {
-        if selectedFolder == "All iCloud" || selectedFolder == "Canvas" { selectedFolder = "Notes"; folderHeader.stringValue = selectedFolder }
+        if selectedFolder == "All iCloud" || selectedFolder == "Canvas" { selectedFolder = "Notes"; folderHeader.stringValue = folderDisplayName(selectedFolder) }
         let note = WorkspaceNote(title: "New Note", body: "", folder: selectedFolder)
         notes.append(note)
         notesTable.reloadData()
@@ -621,7 +819,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     @objc private func createCanvasNote() {
         if selectedFolder == "All iCloud" || selectedFolder == "Canvas" {
             selectedFolder = "Notes"
-            folderHeader.stringValue = selectedFolder
+            folderHeader.stringValue = folderDisplayName(selectedFolder)
             rebuildFolderRows()
         }
         let note = WorkspaceNote(title: "New Canvas", body: "", folder: selectedFolder, isCanvas: true)
@@ -660,6 +858,234 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         let target = range.length == 0 ? NSRange(location: 0, length: text.length) : range
         editor.textStorage?.addAttribute(.font, value: font, range: target)
         textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+    }
+
+    // MARK: - Apple Notes import
+
+    /// Single entry point for one-click import: the toolbar button and the
+    /// Settings panel both call this with no arguments.
+    @objc func importAppleNotes() {
+        guard !isImportingNotes else { return }
+        isImportingNotes = true
+        showImportProgress()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let imported = try AppleNotesImporter.importAll()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isImportingNotes = false
+                    self.hideImportProgress { [weak self] in
+                        self?.mergeImportedNotes(imported)
+                    }
+                }
+            } catch let error as AppleNotesImporterError {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isImportingNotes = false
+                    self.hideImportProgress { [weak self] in
+                        self?.presentImportError(error)
+                    }
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isImportingNotes = false
+                    self.hideImportProgress { [weak self] in
+                        self?.presentImportError(.failed(message))
+                    }
+                }
+            }
+        }
+    }
+
+    private func showImportProgress() {
+        // A sheet without a window is impossible; import anyway, silently.
+        guard let window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Importing Apple Notes…"
+        alert.informativeText = "Reading your notes and folders. This can take a few seconds."
+        let spinner = NSProgressIndicator(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+        alert.accessoryView = spinner
+        alert.addButton(withTitle: "Importing…").isEnabled = false
+        importProgressAlert = alert
+        alert.beginSheetModal(for: window, completionHandler: nil)
+    }
+
+    /// Ends the progress sheet, then runs `completion` only once the sheet is
+    /// actually detached from the window.
+    ///
+    /// `endSheet` is not synchronous with `attachedSheet`: the window keeps
+    /// pointing at the progress sheet for the whole dismissal animation. A
+    /// result alert presented during that window would find the window busy and
+    /// fall back to a free-floating modal window, so hide-then-present has to be
+    /// sequenced through this completion.
+    private func hideImportProgress(completion: (() -> Void)? = nil) {
+        guard let alert = importProgressAlert, let window, alert.window.sheetParent === window else {
+            // No sheet was ever shown (no window, or a sheet was already up).
+            importProgressAlert = nil
+            completion?()
+            return
+        }
+        importProgressAlert = nil
+        let progressWindow = alert.window
+        window.endSheet(progressWindow, returnCode: .OK)
+        // `importProgressAlert` is cleared above so a second import cannot
+        // short-circuit through the guard; the completion must still wait for
+        // THIS sheet to actually detach, otherwise the result sheet is
+        // presented while the window is still busy and falls back to a
+        // separate blocking modal.
+        waitForImportSheetToClose(progressWindow, attempts: 20, completion: completion)
+    }
+
+    /// Polls until the ended sheet is gone (first check after 0.3s, then every
+    /// 0.1s, up to ~2s) so the next sheet is only attached once this one has
+    /// finished dismissing.
+    private func waitForImportSheetToClose(_ progressWindow: NSWindow, attempts: Int,
+                                           completion: (() -> Void)?) {
+        guard attempts > 0 else {
+            completion?()
+            return
+        }
+        let delay: TimeInterval = attempts == 20 ? 0.3 : 0.1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            if self.window?.attachedSheet === progressWindow {
+                self.waitForImportSheetToClose(progressWindow, attempts: attempts - 1, completion: completion)
+            } else {
+                completion?()
+            }
+        }
+    }
+
+    /// Merges the importer's result into the store. `notes` / `folders` are
+    /// built in local copies, assigned under the batching guard, then written
+    /// to disk by one explicit `save()`.
+    private func mergeImportedNotes(_ imported: [ImportedNote]) {
+        var folderSet = Set(folders)
+        var newFolders = folders
+        var newNotes = notes
+        var knownSourceIDs = Set(notes.compactMap(\.sourceID))
+        var importedCount = 0
+        var updatedCount = 0
+        var skippedCount = 0
+        var touchedFolders = Set<String>()
+
+        for note in imported {
+            // A note at the root of Apple Notes has no folder path.
+            let components = note.folderPath.isEmpty ? ["Notes"] : note.folderPath
+            var prefix: [String] = []
+            for component in components {
+                prefix.append(component)
+                let path = prefix.joined(separator: "/")
+                if folderSet.insert(path).inserted { newFolders.append(path) }
+            }
+            let folderPath = components.joined(separator: "/")
+            touchedFolders.insert(folderPath)
+
+            if let index = newNotes.firstIndex(where: { $0.sourceID == note.identifier }) {
+                // Earlier imports stored Apple Notes' plaintext title line in
+                // the body. Remove that exact repeated line on re-import while
+                // preserving all other local edits and note metadata.
+                if let cleanedBody = AppleNotesImporter.removeRepeatedTitle(
+                    from: newNotes[index].body, title: newNotes[index].title
+                ) {
+                    newNotes[index].body = cleanedBody
+                    updatedCount += 1
+                } else {
+                    skippedCount += 1
+                }
+                continue
+            }
+            // A note already in the store by hand (pre-import copy): adopt it
+            // instead of storing a duplicate.
+            if let index = newNotes.firstIndex(where: {
+                $0.sourceID == nil && $0.folder == folderPath && $0.title == note.title && $0.body == note.body
+            }) {
+                newNotes[index].sourceID = note.identifier
+                knownSourceIDs.insert(note.identifier)
+                updatedCount += 1
+                continue
+            }
+            newNotes.append(WorkspaceNote(title: note.title, body: note.body, folder: folderPath,
+                                          isCanvas: false, sourceID: note.identifier))
+            knownSourceIDs.insert(note.identifier)
+            importedCount += 1
+        }
+
+        isBatchingSave = true
+        notes = newNotes
+        folders = newFolders
+        isBatchingSave = false
+        save()
+
+        rebuildFolderRows()
+        notesTable.reloadData()
+        reselectVisibleNote()
+
+        let summary = AppleNotesImportSummary(imported: importedCount, updated: updatedCount,
+                                              skipped: skippedCount, folders: touchedFolders.count)
+        // Already called from `hideImportProgress`'s completion: the progress
+        // sheet is gone, so this attaches as a sheet on the main window.
+        presentImportResult(summary)
+    }
+
+    private func presentImportResult(_ summary: AppleNotesImportSummary) {
+        print("[import] result: imported=\(summary.imported) updated=\(summary.updated) skipped=\(summary.skipped) folders=\(summary.folders) window=\(window != nil) attachedSheet=\(window?.attachedSheet != nil)")
+        let alert = NSAlert()
+        alert.messageText = "Import Complete"
+        if summary.imported == 0 && summary.updated == 0 && summary.skipped > 0 {
+            alert.informativeText = "All \(summary.skipped) notes are already imported. Nothing was changed."
+        } else {
+            var text = "Imported \(summary.imported) notes into \(summary.folders) folders."
+            if summary.skipped > 0 { text += " Skipped \(summary.skipped) notes that were already imported." }
+            if summary.updated > 0 { text += " Updated \(summary.updated) existing matches." }
+            alert.informativeText = text
+        }
+        alert.addButton(withTitle: "OK")
+        presentImportAlert(alert)
+    }
+
+    private func presentImportError(_ error: AppleNotesImporterError) {
+        print("[import] error: \(error.localizedDescription)")
+        let alert = NSAlert()
+        switch error {
+        case .notAuthorized:
+            alert.alertStyle = .warning
+            alert.messageText = "Notesy can’t access Apple Notes"
+            alert.informativeText = "Allow Notesy to control the Notes app, then try importing again: System Settings › Privacy & Security › Automation."
+            alert.addButton(withTitle: "Open System Settings")
+            alert.addButton(withTitle: "OK")
+            presentImportAlert(alert) { response in
+                guard response == .alertFirstButtonReturn,
+                      let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") else { return }
+                NSWorkspace.shared.open(url)
+            }
+        case .noNotes, .notesUnavailable, .failed:
+            alert.messageText = "Import Failed"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            presentImportAlert(alert)
+        }
+    }
+
+    private func presentImportAlert(_ alert: NSAlert, completion: ((NSApplication.ModalResponse) -> Void)? = nil) {
+        if let window, window.attachedSheet == nil {
+            alert.beginSheetModal(for: window, completionHandler: completion)
+        } else if let window {
+            // A sheet is still attached (the progress sheet animating away).
+            // Retry as a sheet once it clears instead of spawning a separate
+            // blocking modal window that lands behind other apps.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.presentImportAlert(alert, completion: completion)
+            }
+        } else {
+            let response = alert.runModal()
+            completion?(response)
+        }
     }
 
     private func insertAtCursor(_ string: String) {
@@ -785,7 +1211,8 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         titleField.stringValue = note.title
         editor.string = note.body
         isUpdatingEditor = false
-        for button in canvasControlButtons { button.isHidden = !note.isCanvas }
+        setCanvasControlsVisible(note.isCanvas)
+        layoutToolbar()
         if note.isCanvas {
             let selectedCanvas = canvasView(for: note)
             for (canvasID, view) in canvasViews { view.isHidden = canvasID != id }
@@ -817,8 +1244,17 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         titleField.isHidden = true
         editorScroll.isHidden = true
         zoomHUD.isHidden = true
-        for button in canvasControlButtons { button.isHidden = true }
+        setCanvasControlsVisible(false)
         for canvas in canvasViews.values { canvas.isHidden = true }
+    }
+
+    /// Hide the glass as well as its hosted button. Hiding only the button
+    /// leaves an empty white control behind in regular note mode.
+    private func setCanvasControlsVisible(_ visible: Bool) {
+        for button in canvasControlButtons {
+            button.isHidden = !visible
+        }
+        for surface in canvasControlSurfaces { surface.isHidden = !visible }
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { visibleNotes.count }
@@ -826,17 +1262,21 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard visibleNotes.indices.contains(row) else { return nil }
         let note = visibleNotes[row]
+        let effectiveTheme = theme.resolved(for: effectiveAppearance)
+        
         let cell = NSTableCellView()
         let heading = NSTextField(labelWithString: note.title)
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
-        heading.textColor = .labelColor
+        heading.textColor = effectiveTheme.textPrimary
+        
         let date = NSTextField(labelWithString: note.modified.formatted(date: .abbreviated, time: .shortened))
         date.font = .systemFont(ofSize: 11)
-        date.textColor = .secondaryLabelColor
+        date.textColor = effectiveTheme.textSecondary
+        
         let previewText = note.isCanvas ? "Canvas · \(note.canvasBlocks.count) cards" : note.body.replacingOccurrences(of: "\n", with: " ")
         let preview = NSTextField(labelWithString: previewText)
         preview.font = .systemFont(ofSize: 11)
-        preview.textColor = .secondaryLabelColor
+        preview.textColor = effectiveTheme.textSecondary
         preview.lineBreakMode = .byTruncatingTail
         let stack = NSStackView(views: [heading, date, preview])
         stack.orientation = .vertical
@@ -853,7 +1293,8 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        return CozyTableRowView()
+        let effectiveTheme = theme.resolved(for: effectiveAppearance)
+        return CozyTableRowView(accentColor: effectiveTheme.accentColor, selectionHighlight: effectiveTheme.selectionHighlight)
     }
 
     func textDidChange(_ notification: Notification) {
@@ -958,7 +1399,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     private func save() {
-        guard !isRestoring, isViewLoaded else { return }
+        guard !isRestoring, !isBatchingSave, isViewLoaded else { return }
         let data = try? JSONEncoder().encode(SavedNotes(notes: notes, folders: folders))
         try? data?.write(to: storeURL, options: .atomic)
     }
@@ -972,23 +1413,13 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     func newCanvas() {
         if selectedFolder == "All iCloud" || selectedFolder == "Canvas" {
             selectedFolder = "Notes"
-            folderHeader.stringValue = selectedFolder
+            folderHeader.stringValue = folderDisplayName(selectedFolder)
             rebuildFolderRows()
         }
         let note = WorkspaceNote(title: "New Canvas", body: "", folder: selectedFolder, isCanvas: true)
         notes.append(note)
         notesTable.reloadData()
         selectNote(note.id)
-    }
-
-    @objc func showImportPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.plainText, .rtf, .html, .pdf]
-        panel.message = "Choose a file exported from Apple Notes"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let body = (try? String(contentsOf: url, encoding: .utf8)) ?? "Imported file: \(url.lastPathComponent)"
-        importNote(title: url.deletingPathExtension().lastPathComponent, body: body)
     }
 
     @objc func showFindPanel() {
@@ -1047,27 +1478,164 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
             existing.removeFromSuperview()
         }
         let guide = OnboardingGuideView(frame: bounds)
+        guide.theme = theme
         guide.autoresizingMask = [.width, .height]
         addSubview(guide, positioned: .above, relativeTo: nil)
         guide.frame = bounds
         guide.start()
     }
+    
+    /// Sync all UI colors to match the current theme
+    private func syncThemeColors() {
+        // `theme` is already resolved for the appearance in effect.
+        let effectiveTheme = theme
+
+        // The backdrop sits behind every glass surface; tinting it with the
+        // accent is what makes a theme read as more than a border color.
+        backdrop.accent = effectiveTheme.accentColor
+
+        // Apply accent color tint to all glass surfaces
+        let tint = effectiveTheme.accentColor.withAlphaComponent(0.12)
+        toolbarGlass.tintColor = tint
+        sidebarGlass.tintColor = tint
+        listCard.tintColor = tint
+        zoomHUD.tintColor = tint
+        toolbarReveal.tintColor = tint
+
+        // Set content background colors on the glass surfaces' content views.
+        // Translucent so the glass still refracts; the reading surfaces below
+        // stay opaque so text contrast never depends on the wallpaper.
+        let barFill = effectiveTheme.contentBackground.withAlphaComponent(0.45)
+        let panelFill = effectiveTheme.contentBackground.withAlphaComponent(0.55)
+        toolbarGlass.contentView?.layer?.backgroundColor = barFill.cgColor
+        sidebarGlass.contentView?.layer?.backgroundColor = panelFill.cgColor
+        listCard.contentView?.layer?.backgroundColor = panelFill.cgColor
+        pageCard.fillColor = effectiveTheme.contentBackground
+        pageCard.borderColor = effectiveTheme.borderColor
+        
+        // Notes table
+        notesTable.backgroundColor = effectiveTheme.contentBackground
+        notesTable.gridColor = effectiveTheme.borderColor
+        
+        // Editor
+        editor.backgroundColor = effectiveTheme.contentBackground
+        editor.textColor = effectiveTheme.textPrimary
+        editor.insertionPointColor = effectiveTheme.accentColor
+        // Existing body text keeps its attributes; only the base color changes.
+        if let storage = editor.textStorage, storage.length > 0 {
+            isUpdatingEditor = true
+            storage.addAttribute(.foregroundColor,
+                                 value: effectiveTheme.textPrimary,
+                                 range: NSRange(location: 0, length: storage.length))
+            isUpdatingEditor = false
+        }
+
+        // Toolbar icons follow the theme rather than the system label color.
+        for button in leftToolbarButtons + formattingToolbarButtons + rightToolbarButtons + canvasControlButtons {
+            button.contentTintColor = effectiveTheme.textSecondary
+        }
+        newNoteButton?.contentTintColor = effectiveTheme.accentColor
+        toolbarRevealButton.contentTintColor = effectiveTheme.textPrimary
+        
+        // Title field
+        titleField.textColor = effectiveTheme.textPrimary
+        titleField.backgroundColor = effectiveTheme.contentBackground
+        
+        // Search field
+        searchField.backgroundColor = effectiveTheme.cardBackground
+        searchField.textColor = effectiveTheme.textPrimary
+        
+        // Folder header
+        folderHeader.textColor = effectiveTheme.textSecondary
+        
+        // Zoom HUD
+        zoomHUD.contentView?.layer?.backgroundColor = effectiveTheme.cardBackground.cgColor
+        zoomLabel.textColor = effectiveTheme.textPrimary
+        
+        // Toolbar reveal
+        toolbarReveal.contentView?.layer?.backgroundColor = effectiveTheme.cardBackground.cgColor
+        
+        // Rebuild folder rows with new theme colors
+        rebuildFolderRows()
+
+        // Keep an open guide in step with the theme.
+        for case let guide as OnboardingGuideView in subviews {
+            guide.theme = effectiveTheme
+        }
+        
+        // Reload notes table to update selection colors
+        notesTable.reloadData()
+        
+        // Update canvas views
+        for canvas in canvasViews.values {
+            canvas.backgroundColor = effectiveTheme.contentBackground
+        }
+        
+        // Force redraw
+        needsDisplay = true
+    }
 }
 
-/// Custom row view with cozy warm selection
+/// Top-down container for the sidebar's folder rows. Rows are placed by frame,
+/// so the scroll view's document height can be computed without Auto Layout.
+private final class FlippedStackView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+/// Content of one folder-row glass: a single button inset from the left edge.
+/// Frame layout keeps `NSGlassEffectView`'s internal content constraints happy.
+private final class FolderRowContentView: NSView {
+    private let button: NSButton
+    private let leadingInset: CGFloat
+
+    init(button: NSButton, leadingInset: CGFloat) {
+        self.button = button
+        self.leadingInset = leadingInset
+        super.init(frame: .zero)
+        addSubview(button)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        let height: CGFloat = 24
+        button.frame = NSRect(
+            x: leadingInset,
+            y: max(0, (bounds.height - height) / 2),
+            width: max(0, bounds.width - leadingInset - 12),
+            height: height
+        )
+    }
+}
+
+/// Custom row view with theme-based selection
 private class CozyTableRowView: NSTableRowView {
-    private let cozyColor = NSColor(srgbRed: 0.98, green: 0.72, blue: 0.32, alpha: 1)
+    private let accentColor: NSColor
+    private let selectionHighlight: NSColor
+    
+    init(accentColor: NSColor, selectionHighlight: NSColor) {
+        self.accentColor = accentColor
+        self.selectionHighlight = selectionHighlight
+        super.init(frame: .zero)
+    }
+    
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
         let rect = bounds.insetBy(dx: 4, dy: 2)
         let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        cozyColor.withAlphaComponent(0.25).setFill()
+        selectionHighlight.setFill()
         path.fill()
         
         // Subtle border
-        cozyColor.withAlphaComponent(0.4).setStroke()
-        path.lineWidth = 1
+        accentColor.withAlphaComponent(0.6).setStroke()
+        path.lineWidth = 1.5
         path.stroke()
     }
     

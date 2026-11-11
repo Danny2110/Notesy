@@ -11,7 +11,12 @@ enum NotesyApp {
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.regular)
-        app.run()
+        // NSApplication.delegate is weak. Keep the delegate alive for the
+        // entire event loop; otherwise ARC may release this local after the
+        // assignment and AppKit later sends messages through a dangling pointer.
+        withExtendedLifetime(delegate) {
+            app.run()
+        }
     }
 
     /// Screenshot hook: `CANVASNOTES_APPEARANCE=dark|light` pins the whole app
@@ -52,7 +57,7 @@ enum NotesyApp {
         newCanvasItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(newCanvasItem)
         fileMenu.addItem(.separator())
-        fileMenu.addItem(NSMenuItem(title: "Import...", action: #selector(AppDelegate.importFromMenu(_:)), keyEquivalent: "i"))
+        fileMenu.addItem(NSMenuItem(title: "Import from Apple Notes…", action: #selector(AppDelegate.importFromMenu(_:)), keyEquivalent: "i"))
         fileMenu.addItem(.separator())
         fileMenu.addItem(NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
         let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
@@ -128,24 +133,24 @@ enum NotesyApp {
 
 /// Window/titlebar color sampled from the top edge of `AmbientBackdropView(.chrome)`
 /// so a transparent titlebar reads as part of the content backdrop in both appearances.
-private func chromeBackgroundColor() -> NSColor {
-    NSColor(name: nil) { appearance in
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        if isDark {
-            return NSColor(srgbRed: 0.153, green: 0.149, blue: 0.157, alpha: 1)
-        }
-        return NSColor(srgbRed: 0.973, green: 0.965, blue: 0.945, alpha: 1)
+/// The value is a dynamic color resolved by AppKit, so switching appearance
+/// retints the titlebar without the app having to rebuild it.
+private func chromeBackgroundColor(for themeID: ThemeID) -> NSColor {
+    let light = themeForID(themeID).lightBackground
+    let dark = notesyPalette(for: themeID, dark: true).darkBackground
+    return NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
     }
 }
 
 /// Shared chrome treatment: the titlebar dissolves into the backdrop, with no
 /// separator line, so glass bars inside the content own the visible edges.
 @MainActor
-private func applyGlassChrome(to window: NSWindow) {
+private func applyGlassChrome(to window: NSWindow, themeID: ThemeID) {
     window.titlebarAppearsTransparent = true
     window.titleVisibility = .hidden
     window.titlebarSeparatorStyle = .none
-    window.backgroundColor = chromeBackgroundColor()
+    window.backgroundColor = chromeBackgroundColor(for: themeID)
     // Remove the titlebar shadow line
     if let titlebar = window.standardWindowButton(.closeButton)?.superview?.superview {
         titlebar.wantsLayer = true
@@ -154,11 +159,32 @@ private func applyGlassChrome(to window: NSWindow) {
 }
 
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
     private var settingsWindow: NSWindow?
     private weak var workspace: NotesWorkspaceView?
+    /// The chosen theme, kept as an ID so every surface can resolve the light or
+    /// dark palette for whatever appearance is current. Storing a resolved
+    /// palette instead let a dark theme leak into a light window (and back).
+    private var currentThemeID: ThemeID = UserDefaults.standard.selectedThemeID ?? .amber {
+        didSet {
+            UserDefaults.standard.selectedThemeID = currentThemeID
+            updateWindowThemes()
+        }
+    }
 
+    private func updateWindowThemes() {
+        if let window = window {
+            applyGlassChrome(to: window, themeID: currentThemeID)
+        }
+        if let settingsWindow = settingsWindow {
+            applyGlassChrome(to: settingsWindow, themeID: currentThemeID)
+            (settingsWindow.contentView as? SettingsView)?.applyTheme(currentThemeID)
+        }
+        workspace?.setTheme(currentThemeID)
+        workspace?.needsDisplay = true
+    }
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
         let content = NotesWorkspaceView(frame: NSRect(x: 0, y: 0, width: 1280, height: 820))
         workspace = content
@@ -168,7 +194,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let window = NSWindow(contentRect: content.frame, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Notesy"
-        applyGlassChrome(to: window)
+        applyGlassChrome(to: window, themeID: currentThemeID)
         window.minSize = NSSize(width: 900, height: 600)
         window.center()
         window.contentView = content
@@ -183,9 +209,54 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 content?.showWelcomeGuide()
             }
         }
+
+        // Screenshot hook: open Settings on launch so the theme grid can be
+        // captured without driving the menu bar. `cycle` also closes and
+        // reopens it, which is the path that used to dereference a freed window.
+        let settingsHook = ProcessInfo.processInfo.environment["CANVASNOTES_OPEN_SETTINGS"]?.lowercased()
+        if settingsHook == "1" || settingsHook == "cycle" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak content] in
+                guard let self, let content else { return }
+                self.openSettings(for: content)
+                guard settingsHook == "cycle" else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    guard let self else { return }
+                    self.settingsWindow?.close()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self, weak content] in
+                        guard let self, let content else { return }
+                        self.openSettings(for: content)
+                    }
+                }
+            }
+        }
+
+        // Screenshot hook: press a theme tile through hit-testing.
+        if let raw = ProcessInfo.processInfo.environment["CANVASNOTES_THEME_CLICK"],
+           let themeID = ThemeID(rawValue: raw.lowercased()) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                (self?.settingsWindow?.contentView as? SettingsView)?.simulateThemeClick(themeID)
+            }
+        }
+
+        // Screenshot hook: flip appearance a moment after launch so the live
+        // light/dark transition can be captured mid-run.
+        if let requested = ProcessInfo.processInfo.environment["CANVASNOTES_TOGGLE_APPEARANCE"]?.lowercased() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                NSApp.appearance = NSAppearance(named: requested == "dark" ? .darkAqua : .aqua)
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// An `NSWindow` releases itself on close by default, which leaves the
+    /// `settingsWindow` reference pointing at freed memory and crashes the next
+    /// time Settings is reopened. Drop the reference instead of trusting it.
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow,
+              closing === settingsWindow else { return }
+        settingsWindow = nil
+    }
 
     // MARK: - Menu Actions
 
@@ -203,7 +274,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func importFromMenu(_ sender: Any?) {
-        workspace?.showImportPanel()
+        workspace?.importAppleNotes()
     }
 
     @objc func showFindPanel(_ sender: Any?) {
@@ -236,15 +307,30 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openSettings(for workspace: NotesWorkspaceView) {
         if settingsWindow == nil {
-            let content = SettingsImportView(frame: NSRect(x: 0, y: 0, width: 480, height: 210))
-            content.onImported = { title, body in workspace.importNote(title: title, body: body) }
+            let content = SettingsView(frame: NSRect(x: 0, y: 0, width: 560, height: 660))
+            content.onImport = { [weak self, weak workspace] in
+                guard let self, let workspace else { return }
+                self.settingsWindow?.close()
+                self.settingsWindow = nil
+                workspace.importAppleNotes()
+            }
+            content.onThemeChange = { [weak self] themeID in
+                self?.currentThemeID = themeID
+            }
+            content.configure(selectedTheme: UserDefaults.standard.selectedThemeID ?? .amber)
             let settings = NSWindow(contentRect: content.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
             settings.title = "Notesy Settings"
-            applyGlassChrome(to: settings)
+            // AppKit's default is to release a window when it closes; under ARC
+            // that deallocates it behind our strong reference and the next open
+            // dereferences freed memory.
+            settings.isReleasedWhenClosed = false
+            settings.delegate = self
+            applyGlassChrome(to: settings, themeID: currentThemeID)
             settings.contentView = content
             settings.center()
             settingsWindow = settings
         }
+        settingsWindow.map { applyGlassChrome(to: $0, themeID: currentThemeID) }
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 }
@@ -256,73 +342,167 @@ private final class SettingsPanelContentView: NSView {
 }
 
 @MainActor
-private final class SettingsImportView: NSView {
-    var onImported: ((String, String) -> Void)?
+private final class SettingsView: NSView {
+    var onImport: (() -> Void)?
+    var onThemeChange: ((ThemeID) -> Void)?
     override var isFlipped: Bool { true }
-
+    
     private let backdrop = AmbientBackdropView()
     private let panel = GlassSurfaceView.panel(cornerRadius: 22)
     private let panelContent = SettingsPanelContentView()
-    private let heading = NSTextField(labelWithString: "Import from Notes")
-    private let descriptionLabel = NSTextField(wrappingLabelWithString: "Export a note from Apple Notes as PDF, RTF, plain text, or HTML, then import it into Notesy.")
-    private let importButton = NSButton(title: "Choose Notes Export…", target: nil, action: nil)
-
+    
+    // Theme section
+    private let themeHeading = NSTextField(labelWithString: "Color Theme")
+    private let themeDescription = NSTextField(wrappingLabelWithString: "Choose a color theme for the entire app. Changes apply immediately.")
+    private let themeGrid = ThemeGridContainer()
+    
+    // Import section
+    private let importHeading = NSTextField(labelWithString: "Apple Notes")
+    private let importDescription = NSTextField(wrappingLabelWithString: "Bring all your Apple Notes—including folders inside folders—into Notesy in one click. Nothing is removed from Notes.")
+    private let importButton = NSButton(title: "Import All Notes", target: nil, action: nil)
+    private let importFootnote = NSTextField(wrappingLabelWithString: "Notesy asks for permission the first time. You can change this later in System Settings › Privacy & Security › Automation.")
+    private let divider = NSBox()
+    
     /// Inset between the window edge and the glass panel on every side.
     private let panelInset: CGFloat = 16
     /// Inset between the panel edge and its content.
     private let contentInset: CGFloat = 24
+    
+    func configure(selectedTheme: ThemeID) {
+        themeGrid.onThemeSelected = { [weak self] themeID in
+            self?.applyTheme(themeID)
+            self?.onThemeChange?(themeID)
+        }
+        themeGrid.configure(selectedTheme: selectedTheme)
+        applyTheme(selectedTheme)
 
+        // Refresh layout to include new height
+        needsLayout = true
+    }
+
+    private var currentThemeID: ThemeID = .amber
+
+    /// Retints the backdrop behind the settings panel for the chosen theme.
+    func applyTheme(_ themeID: ThemeID) {
+        currentThemeID = themeID
+        backdrop.accent = themeForID(themeID).resolved(for: effectiveAppearance).accentColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        backdrop.accent = themeForID(currentThemeID).resolved(for: effectiveAppearance).accentColor
+    }
+    
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-
+        
         backdrop.tone = .chrome
         backdrop.frame = bounds
         backdrop.autoresizingMask = [.width, .height]
         addSubview(backdrop)
-
+        
         panel.frame = bounds.insetBy(dx: panelInset, dy: panelInset)
         panel.autoresizingMask = [.width, .height]
         addSubview(panel)
-
+        
         panelContent.autoresizingMask = [.width, .height]
-        heading.font = .systemFont(ofSize: 20, weight: .semibold)
-        heading.textColor = .labelColor
-        heading.autoresizingMask = [.width]
-        descriptionLabel.textColor = .secondaryLabelColor
-        descriptionLabel.autoresizingMask = [.width]
+        
+        // Theme section
+        themeHeading.font = .systemFont(ofSize: 20, weight: .semibold)
+        themeHeading.textColor = .labelColor
+        themeHeading.autoresizingMask = [.width]
+        
+        themeDescription.textColor = .secondaryLabelColor
+        themeDescription.autoresizingMask = [.width]
+        themeDescription.font = .systemFont(ofSize: 13)
+        
+        // Add the theme section to panel content
+        [themeHeading, themeDescription, themeGrid].forEach(panelContent.addSubview)
+        
+        // Import section
+        importHeading.font = .systemFont(ofSize: 20, weight: .semibold)
+        importHeading.textColor = .labelColor
+        importHeading.autoresizingMask = [.width]
+        
+        importDescription.textColor = .secondaryLabelColor
+        importDescription.autoresizingMask = [.width]
+        importDescription.font = .systemFont(ofSize: 13)
+        
         importButton.target = self
-        importButton.action = #selector(importNotes)
-        // `.glass` bezel draws as bare text when nested inside a glass contentView,
-        // so use the standard bezel plus default-action styling instead.
+        importButton.action = #selector(importAllNotes)
         importButton.bezelStyle = .rounded
         importButton.keyEquivalent = "\r"
         importButton.controlSize = .large
         importButton.autoresizingMask = [.minYMargin]
-        [heading, descriptionLabel, importButton].forEach(panelContent.addSubview)
+        
+        importFootnote.font = .systemFont(ofSize: 11)
+        importFootnote.textColor = .secondaryLabelColor
+        importFootnote.autoresizingMask = [.width]
+
+        // One divider for the life of the view; `layout()` only moves it.
+        divider.boxType = .separator
+        panelContent.addSubview(divider)
+
+        [importHeading, importDescription, importButton, importFootnote].forEach(panelContent.addSubview)
         panel.contentView = panelContent
     }
-
+    
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
+    
+    @objc private func importAllNotes() {
+        onImport?()
+    }
 
+    /// Screenshot hook: press a theme tile the way a mouse click would, through
+    /// hit-testing, so the tile wiring itself is what gets exercised.
+    func simulateThemeClick(_ themeID: ThemeID) {
+        guard let tile = themeGrid.frame(for: themeID) else { return }
+        let point = themeGrid.convert(NSPoint(x: tile.midX, y: tile.midY), to: self)
+        guard let hit = hitTest(point) else { return }
+        let event = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: point,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window?.windowNumber ?? 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )
+        if let event { hit.mouseDown(with: event) }
+    }
+    
     override func layout() {
         super.layout()
         backdrop.frame = bounds
         panel.frame = bounds.insetBy(dx: panelInset, dy: panelInset)
 
         let contentWidth = max(0, panel.bounds.width - contentInset * 2)
-        heading.frame = NSRect(x: contentInset, y: 24, width: contentWidth, height: 26)
-        descriptionLabel.frame = NSRect(x: contentInset, y: 58, width: contentWidth, height: 48)
-        // Grouped directly under the description; no dead space in the panel.
-        importButton.frame = NSRect(x: contentInset, y: 118, width: 220, height: 32)
-    }
+        var y: CGFloat = 24
 
-    @objc private func importNotes() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.plainText, .rtf, .html, .pdf]
-        panel.message = "Choose a file exported from Apple Notes"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let body = (try? String(contentsOf: url, encoding: .utf8)) ?? "Imported file: \(url.lastPathComponent)"
-        onImported?(url.deletingPathExtension().lastPathComponent, body)
+        // Theme section
+        themeHeading.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: 28)
+        y += 28 + 8
+        themeDescription.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: 34)
+        y += 34 + 12
+
+        // Theme grid: 3 rows of 76pt buttons with 12pt gaps.
+        let gridHeight: CGFloat = 252
+        themeGrid.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: gridHeight)
+        y += gridHeight + 20
+
+        // Divider
+        divider.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: 1)
+        y += 1 + 20
+
+        // Import section
+        importHeading.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: 28)
+        y += 28 + 8
+        importDescription.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: 34)
+        y += 34 + 16
+        importButton.frame = NSRect(x: contentInset, y: y, width: 220, height: 34)
+        y += 34 + 12
+        importFootnote.frame = NSRect(x: contentInset, y: y, width: contentWidth, height: 44)
     }
 }

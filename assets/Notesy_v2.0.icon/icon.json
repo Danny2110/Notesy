@@ -1,0 +1,236 @@
+{
+  "fill" : {
+    "solid" : "display-p3:0.98389,0.97656,0.96143,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "Rectangle 1.png",
+          "name" : "Rectangle 1",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              183,
+              246.5
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "image-name" : "Enjoy!.png",
+          "name" : "Enjoy!",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              94.5,
+              248
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "image-name" : "Notesy.png",
+          "name" : "Notesy",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              119,
+              0
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 12.png",
+          "name" : "Liquid Glass - Regular - Small-4 12",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -187.5,
+              -397
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 11.png",
+          "name" : "Liquid Glass - Regular - Small-4 11",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              27.5,
+              -397
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 10.png",
+          "name" : "Liquid Glass - Regular - Small-4 10",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              213,
+              -397
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 9.png",
+          "name" : "Liquid Glass - Regular - Small-4 9",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              417,
+              -397
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 8.png",
+          "name" : "Liquid Glass - Regular - Small-4 8",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -187.5,
+              -222.5
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 7.png",
+          "name" : "Liquid Glass - Regular - Small-4 7",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              24.5,
+              -222.5
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 6.png",
+          "name" : "Liquid Glass - Regular - Small-4 6",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              213,
+              -222.5
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 5.png",
+          "name" : "Liquid Glass - Regular - Small-4 5",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -403,
+              -37
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 4.png",
+          "name" : "Liquid Glass - Regular - Small-4 4",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -403,
+              -222.5
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 3.png",
+          "name" : "Liquid Glass - Regular - Small-4 3",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -403,
+              -397
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 2.png",
+          "name" : "Liquid Glass - Regular - Small-4 2",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -403,
+              184
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4.png",
+          "name" : "Liquid Glass - Regular - Small-4",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -403,
+              387.5
+            ]
+          }
+        },
+        {
+          "image-name" : "Rectangle 2 3.png",
+          "name" : "Rectangle 2 3",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              323,
+              282
+            ]
+          }
+        },
+        {
+          "image-name" : "Ellipse 2.png",
+          "name" : "Ellipse 2",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              326,
+              -153
+            ]
+          }
+        },
+        {
+          "image-name" : "Ellipse 3.png",
+          "name" : "Ellipse 3",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -203,
+              318
+            ]
+          }
+        },
+        {
+          "image-name" : "Liquid Glass - Regular - Small-4 14.png",
+          "name" : "Liquid Glass - Regular - Small-4 14",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              417,
+              -222.5
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

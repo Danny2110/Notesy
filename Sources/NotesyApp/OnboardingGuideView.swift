@@ -16,7 +16,14 @@ final class OnboardingGuideView: NSView {
     private let progressLabel = NSTextField(labelWithString: "")
     private let illustrationView = NSImageView()
     private var currentStep = 0
+    private var currentIllustration: IllustrationType? = nil
     private let steps: [GuideStep]
+    /// Current theme for color consistency
+    var theme: NotesyTheme = amberTheme {
+        didSet {
+            updateThemeColors()
+        }
+    }
 
     struct GuideStep {
         let title: String
@@ -135,8 +142,30 @@ final class OnboardingGuideView: NSView {
         guideContent.addSubview(progressLabel)
 
         updateStep()
+        updateThemeColors()
     }
-
+    
+    /// Update all UI colors to match the current theme
+    private func updateThemeColors() {
+        let effectiveTheme = theme.resolved(for: effectiveAppearance)
+        
+        // Card background
+        cardBackground.layer?.backgroundColor = effectiveTheme.cardBackground.withAlphaComponent(0.985).cgColor
+        
+        // Text colors
+        titleLabel.textColor = effectiveTheme.textPrimary
+        bodyLabel.textColor = effectiveTheme.textSecondary
+        progressLabel.textColor = effectiveTheme.textTertiary
+        
+        // Button colors
+        nextGlass.tintColor = effectiveTheme.accentColor.withAlphaComponent(0.85)
+        nextButton.contentTintColor = .white
+        skipButton.contentTintColor = effectiveTheme.textPrimary
+        
+        // Regenerate illustration with new theme colors
+        updateIllustration(for: currentIllustration)
+    }
+    
     override func layout() {
         super.layout()
         backdrop.frame = bounds
@@ -218,6 +247,7 @@ final class OnboardingGuideView: NSView {
         skipButton.isHidden = currentStep == steps.count - 1
         skipGlass.isHidden = skipButton.isHidden
 
+        currentIllustration = step.illustration
         updateIllustration(for: step.illustration)
         // Text length changes the body height and the illustration toggles the
         // band heights, so re-run the band layout for this step.
@@ -235,7 +265,7 @@ final class OnboardingGuideView: NSView {
         let size = NSSize(width: 320, height: 138)
         let image = NSImage(size: size)
         image.lockFocus()
-
+        
         guard let ctx = NSGraphicsContext.current?.cgContext else {
             image.unlockFocus()
             return
@@ -244,12 +274,12 @@ final class OnboardingGuideView: NSView {
         // here reads as a dark slab inside the card.
         ctx.clear(CGRect(origin: .zero, size: size))
         
-        let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let accentColor = NSColor.systemBlue
-        let textColor = NSColor.labelColor
-        let secondaryColor = NSColor.secondaryLabelColor
-        let cardColor = isDark ? NSColor(white: 0.2, alpha: 1) : NSColor(white: 0.95, alpha: 1)
-        let cardBorder = isDark ? NSColor(white: 0.4, alpha: 0.5) : NSColor(white: 0.7, alpha: 0.5)
+        let effectiveTheme = theme.resolved(for: effectiveAppearance)
+        let accentColor = effectiveTheme.accentColor
+        let textColor = effectiveTheme.textPrimary
+        let secondaryColor = effectiveTheme.textSecondary
+        let cardColor = effectiveTheme.cardBackground
+        let cardBorder = effectiveTheme.borderColor
         
         switch type {
         case .dragToMove:
@@ -576,7 +606,9 @@ final class OnboardingGuideView: NSView {
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            self?.removeFromSuperview()
+            DispatchQueue.main.async {
+                self?.removeFromSuperview()
+            }
         }
     }
 
