@@ -254,6 +254,43 @@ document.querySelector('#toggle-theme').addEventListener('click', () => {
   demoWindow.classList.toggle('dark-demo');
   showToast(demoWindow.classList.contains('dark-demo') ? 'Evening mode.' : 'Back to the light.');
 });
+const colorThemes = [
+  ['amber', 'Amber', '#efa638'], ['blue', 'Blue', '#477fe9'], ['purple', 'Purple', '#a657eb'],
+  ['green', 'Green', '#2ea15c'], ['red', 'Red', '#d44040'], ['ocean', 'Ocean', '#1a85c7'],
+  ['midnight', 'Midnight', '#526bb8'], ['forest', 'Forest', '#428549'], ['rose', 'Rose', '#c24d78'],
+];
+const paletteMenu = document.querySelector('#palette-menu');
+const paletteButton = document.querySelector('#open-palette');
+colorThemes.forEach(([id, name, color], index) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `palette-option${index === 0 ? ' selected' : ''}`;
+  button.dataset.theme = id;
+  button.setAttribute('aria-label', `${name} theme`);
+  button.setAttribute('aria-pressed', String(index === 0));
+  button.innerHTML = `<i style="--swatch:${color}"></i><span>${name}</span>`;
+  button.addEventListener('click', () => {
+    demoWindow.dataset.theme = id;
+    paletteMenu.querySelectorAll('.palette-option').forEach(option => {
+      const selected = option === button;
+      option.classList.toggle('selected', selected);
+      option.setAttribute('aria-pressed', String(selected));
+    });
+    showToast(`${name} theme selected.`);
+  });
+  paletteMenu.append(button);
+});
+paletteButton.addEventListener('click', () => {
+  const open = paletteMenu.hidden;
+  paletteMenu.hidden = !open;
+  paletteButton.setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('click', event => {
+  if (!event.target.closest('.palette-control')) {
+    paletteMenu.hidden = true;
+    paletteButton.setAttribute('aria-expanded', 'false');
+  }
+});
 document.querySelector('#format-text').addEventListener('click', () => showToast('Select a card title to give it a little emphasis.'));
 document.querySelector('#add-checklist').addEventListener('click', () => addCanvasCard('A little checklist', '☐ Make a note\n☐ Add one more thought'));
 document.querySelector('#add-table').addEventListener('click', () => addCanvasCard('A small table', 'Idea         | Next step\nOne thought | Let it grow'));
