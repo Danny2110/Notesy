@@ -6,6 +6,29 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.0.0</title>
+      <pubDate>Fri, 13 Nov 2026 17:26:28 +0000</pubDate>
+      <sparkle:version>300</sparkle:version>
+      <sparkle:shortVersionString>3.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.0.0
+
+Highlights
+• Self-updating — Check for Updates now installs the new version for you. It downloads the release, verifies it, replaces Notesy.app and relaunches, no dragging files around.
+• Still manual, still private — nothing checks for updates on launch or in the background. It runs when you pick Check for Updates from the app menu or press the button in Settings.
+• Verified updates — every release is signed with an EdDSA key, and the replacement app's own code signature is checked before it is swapped in. A tampered download is rejected.
+• Same Settings and menu — Check for Updates lives in the app menu and in Settings › Updates.
+
+Everything from 2.6.0 is still here: drawing notes, sketching over text, textured paper, and the check that told you when a new version existed.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications.
+
+Added
+
+Writing• Word count / reading time — shown right-aligned in the title band while a text note is selected ("127 words · 1 min read"). Updated live as you type.• Export / print — File → Export as Markdown…, Export as PDF…, Print… (⌘E, ⌘⇧E, ⌘P). Markdown strips only newlines; PDF prints the page with a heading + body, and for drawings prints the rendered ink.• Focus mode — View → Focus Mode (⌘F) hides sidebar, list and toolbar, leaving just the page. Activates again to restore them.• Pin/Unpin Note — Edit → Pin/Unpin Note (⌘⇧P) or right-click a row → Pin Note. Pinned notes float to the top of every list view; a small pin icon marks them in the row.Drawing• Per-tool colour memory — pen and highlighter keep their own last colour across switches, notes and relaunches (persisted in UserDefaults). Switching to a tool that had a saved colour restores it immediately.• Stroke commits save ink immediately — writing the sidecar file after each committed stroke means a crash or quit now loses at most an ongoing gesture instead of the whole session.Organisation• Trash with restore — deleting moves a note into the Trash folder (shows a count badge on the Trash row). Right-click a trash row → Restore Note, or select Trash → click Empty Trash… to delete forever.• Quick Switcher (⌘K) — opens a 520×420 search panel over the canvas. Type a title or body fragment, see filtered matches live, press Return to jump to that note, Escape to close. Also reachable from View → Quick Switcher….• Right-click context menu on list rows — Pin Note, Share Note…, Move to Trash (or Delete Forever / Restore Note when in Trash). No need to reach for toolbar buttons anymore.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.0.0/Notesy.app.zip" length="3634450" type="application/octet-stream" sparkle:edSignature="Iyp8zmYpLNm5YiQ/IokxIr6PDJKR8hoZAA4tLpq4Kxm8j8SZPRwGW114pNuncnPBCvT2Lf8IsklK3ExzZL3MCw=="/>
+    </item>
+    <item>
       <title>Notesy 2.6.1</title>
       <pubDate>Fri, 13 Nov 2026 15:53:33 +0000</pubDate>
       <sparkle:version>261</sparkle:version>
