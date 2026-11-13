@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Notesy</title>
+    <link>https://github.com/Danny2110/Notesy</link>
+    <description>Notesy releases</description>
+    <language>en</language>
+    <item>
+      <title>Notesy 2.6.1</title>
+      <pubDate>Fri, 13 Nov 2026 15:53:33 +0000</pubDate>
+      <sparkle:version>261</sparkle:version>
+      <sparkle:shortVersionString>2.6.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy 2.6.1
+
+Notesy can now update itself.
+
+Highlights
+• Self-updating — Check for Updates now installs the new version for you. It downloads the release, verifies it, replaces Notesy.app and relaunches, no dragging files around.
+• Still manual, still private — nothing checks for updates on launch or in the background. It runs when you pick Check for Updates from the app menu or press the button in Settings.
+• Verified updates — every release is signed with an EdDSA key, and the replacement app's own code signature is checked before it is swapped in. A tampered download is rejected.
+• Same Settings and menu — Check for Updates lives in the app menu and in Settings › Updates.
+
+Everything from 2.6.0 is still here: drawing notes, sketching over text, textured paper, and the check that told you when a new version existed.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v2.6.1/Notesy.app.zip" length="3581322" type="application/octet-stream" sparkle:edSignature="I9+fApp8RcnSVyttt+eyPRzLK0vbEmf4G7FhecDpcJeR5wm0VG3p8okpUDrEr8TogkDD52zLJfrm2jgZ8fKpDw=="/>
+    </item>
+    <item>
+      <title>Notesy 2.6.0</title>
+      <pubDate>Fri, 13 Nov 2026 14:55:27 +0000</pubDate>
+      <sparkle:version>260</sparkle:version>
+      <sparkle:shortVersionString>2.6.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy 2.6.0
+
+Check for updates, sketch on top of your notes, and put the page on real paper.
+
+Highlights
+• Check for Updates — the Notesy menu now asks GitHub for the newest release and tells you whether you're current, with a Download button straight to the release page. It only runs when you ask; nothing phones home on launch.
+• Sketch on this note — draw directly over a text note. Ink sits on the visible page while the title band stays editable, so a margin doodle, a circled paragraph or a signature lives with the note it belongs to.
+• Sketch ink is part of the note — it's saved alongside the text, survives relaunch, and you can switch a note between text, sketch over text, and a full drawing note without losing the ink.
+• Textured paper — a new Settings › Paper switch lays the page on a photo of real paper, for typing and drawing alike. It's multiplied over the theme's own page colour, so dark themes keep dark paper and light text stays readable. Applies to drawing notes, sketch overlays and note thumbnails.
+• Drawing fixes — the ink surface now starts below the title band instead of under it, and the drawing palette is split into two fitted rows that scale down and stay inside the editor at every window width.
+
+Everything from 2.5.0 is still here: the three-column glass workspace, the spatial canvas, and the nine themes.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v2.6.0/Notesy.app.zip" length="2546796" type="application/octet-stream" sparkle:edSignature="80NGjk6IXU7E4Cz+33BaKKhvNOQxJqG/OYrZ5UUATVC1dB9uFagmfdxnA86uflrTBg0p8J21Yx6d6mmuQM1ADA=="/>
+    </item>
+  </channel>
+</rss>
