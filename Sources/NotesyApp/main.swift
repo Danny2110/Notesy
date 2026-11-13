@@ -56,8 +56,16 @@ enum NotesyApp {
         let newCanvasItem = NSMenuItem(title: "New Canvas", action: #selector(AppDelegate.newCanvasFromMenu(_:)), keyEquivalent: "n")
         newCanvasItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(newCanvasItem)
+        let newDrawingItem = NSMenuItem(title: "New Drawing", action: #selector(AppDelegate.newDrawingFromMenu(_:)), keyEquivalent: "n")
+        newDrawingItem.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(newDrawingItem)
         fileMenu.addItem(.separator())
         fileMenu.addItem(NSMenuItem(title: "Import from Apple Notes…", action: #selector(AppDelegate.importFromMenu(_:)), keyEquivalent: "i"))
+        let drawImports = NSMenuItem(title: "Import Drawings from Apple Notes…", action: #selector(AppDelegate.importDrawingsFromMenu(_:)), keyEquivalent: "")
+        fileMenu.addItem(drawImports)
+        let fileImportItem = NSMenuItem(title: "Import Drawing from File…", action: #selector(AppDelegate.importDrawingFileFromMenu(_:)), keyEquivalent: "i")
+        fileImportItem.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(fileImportItem)
         fileMenu.addItem(.separator())
         fileMenu.addItem(NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
         let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
@@ -230,6 +238,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             }
         }
 
+        // Screenshot hook: open a drawing (or a text note in sketch mode) so
+        // the ink surface can be captured without driving the UI.
+        if let hook = ProcessInfo.processInfo.environment["CANVASNOTES_OPEN_CANVAS"]?.lowercased() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak content] in
+                switch hook {
+                case "drawing": content?.openFirstDrawingForTesting()
+                case "sketch": content?.openSketchForTesting()
+                default: break
+                }
+            }
+        }
+
         // Screenshot hook: press a theme tile through hit-testing.
         if let raw = ProcessInfo.processInfo.environment["CANVASNOTES_THEME_CLICK"],
            let themeID = ThemeID(rawValue: raw.lowercased()) {
@@ -248,6 +268,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// Flush the debounced store + drawing writes so quitting right after a
+    /// keystroke or a stroke never loses the last edit.
+    func applicationWillTerminate(_ notification: Notification) {
+        workspace?.flushPendingSaves()
+    }
 
     /// An `NSWindow` releases itself on close by default, which leaves the
     /// `settingsWindow` reference pointing at freed memory and crashes the next
@@ -275,6 +301,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
 
     @objc func importFromMenu(_ sender: Any?) {
         workspace?.importAppleNotes()
+    }
+
+    @objc func newDrawingFromMenu(_ sender: Any?) {
+        workspace?.newDrawing()
+    }
+
+    @objc func importDrawingsFromMenu(_ sender: Any?) {
+        workspace?.importDrawings()
+    }
+
+    @objc func importDrawingFileFromMenu(_ sender: Any?) {
+        workspace?.importDrawingFile()
     }
 
     @objc func showFindPanel(_ sender: Any?) {

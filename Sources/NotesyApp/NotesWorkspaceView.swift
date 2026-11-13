@@ -7,30 +7,44 @@ private struct WorkspaceNote: Codable, Identifiable {
     var folder: String
     var modified: Date = Date()
     var isCanvas = false
+    /// Whether this note is a handwriting/drawing note (distinct from canvas cards).
+    var isDrawing = false
     var canvasBlocks: [NoteBlock] = []
     var connections: [NoteConnection] = []
     var attachments: [Attachment] = []
     /// Identifier of the Apple Notes note this was imported from, if any.
     /// Used to make repeated imports idempotent.
     var sourceID: String? = nil
+    /// PNG file name inside `DrawingMedia.drawingsDirectory`. Used when the
+    /// drawing came from an imported Apple Notes attachment or a dragged-in
+    /// image — it becomes the paper under the ink.
+    var drawingFile: String? = nil
+    /// Sidecar file name (`"<uuid>.pkdrawing"`) for the editable strokes.
+    var drawingStrokeFile: String? = nil
+    /// Small preview PNG rendered from the strokes, used as the list thumbnail.
+    var drawingPreviewFile: String? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, body, folder, modified, isCanvas, canvasBlocks, connections, attachments, sourceID
+        case id, title, body, folder, modified, isCanvas, isDrawing, canvasBlocks, connections, attachments, sourceID, drawingFile, drawingStrokeFile, drawingPreviewFile
     }
 
-    init(id: UUID = UUID(), title: String, body: String, folder: String, modified: Date = Date(), isCanvas: Bool = false,
-         canvasBlocks: [NoteBlock] = [], connections: [NoteConnection] = [], attachments: [Attachment] = [],
-         sourceID: String? = nil) {
+    init(id: UUID = UUID(), title: String, body: String, folder: String, modified: Date = Date(), isCanvas: Bool = false, isDrawing: Bool = false,
+          canvasBlocks: [NoteBlock] = [], connections: [NoteConnection] = [], attachments: [Attachment] = [],
+          sourceID: String? = nil, drawingFile: String? = nil, drawingStrokeFile: String? = nil, drawingPreviewFile: String? = nil) {
         self.id = id
         self.title = title
         self.body = body
         self.folder = folder
         self.modified = modified
         self.isCanvas = isCanvas
+        self.isDrawing = isDrawing
         self.canvasBlocks = canvasBlocks
         self.connections = connections
         self.attachments = attachments
         self.sourceID = sourceID
+        self.drawingFile = drawingFile
+        self.drawingStrokeFile = drawingStrokeFile
+        self.drawingPreviewFile = drawingPreviewFile
     }
 
     init(from decoder: Decoder) throws {
@@ -41,12 +55,16 @@ private struct WorkspaceNote: Codable, Identifiable {
         folder = try values.decode(String.self, forKey: .folder)
         modified = try values.decodeIfPresent(Date.self, forKey: .modified) ?? Date()
         isCanvas = try values.decodeIfPresent(Bool.self, forKey: .isCanvas) ?? false
+        isDrawing = try values.decodeIfPresent(Bool.self, forKey: .isDrawing) ?? false
         canvasBlocks = try values.decodeIfPresent([NoteBlock].self, forKey: .canvasBlocks) ?? []
         connections = try values.decodeIfPresent([NoteConnection].self, forKey: .connections) ?? []
         // Synthesized `Encodable` has always written attachments; without this
         // decode they were dropped on every load.
         attachments = try values.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
         sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID)
+        drawingFile = try values.decodeIfPresent(String.self, forKey: .drawingFile)
+        drawingStrokeFile = try values.decodeIfPresent(String.self, forKey: .drawingStrokeFile)
+        drawingPreviewFile = try values.decodeIfPresent(String.self, forKey: .drawingPreviewFile)
     }
 
     /// Explicit, because relying on the synthesized encoder left `attachments`
@@ -61,13 +79,16 @@ private struct WorkspaceNote: Codable, Identifiable {
         try container.encode(folder, forKey: .folder)
         try container.encode(modified, forKey: .modified)
         try container.encode(isCanvas, forKey: .isCanvas)
+        try container.encode(isDrawing, forKey: .isDrawing)
         try container.encode(canvasBlocks, forKey: .canvasBlocks)
         try container.encode(connections, forKey: .connections)
         try container.encode(attachments, forKey: .attachments)
         try container.encodeIfPresent(sourceID, forKey: .sourceID)
+        try container.encodeIfPresent(drawingFile, forKey: .drawingFile)
+        try container.encodeIfPresent(drawingStrokeFile, forKey: .drawingStrokeFile)
+        try container.encodeIfPresent(drawingPreviewFile, forKey: .drawingPreviewFile)
     }
 }
-
 /// Outcome of one Apple Notes import pass, for the completion alert.
 struct AppleNotesImportSummary {
     let imported: Int
@@ -122,7 +143,23 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     private var canvasViews: [UUID: WorkspaceScrollView] = [:]
     private var canvasControlButtons: [NSButton] = []
     private var canvasControlSurfaces: [GlassSurfaceView] = []
+    private var drawingViews: [UUID: DrawingEditorView] = [:]
+    /// Id of the currently-loaded drawing note; nil means none loaded.
+    /// Prevents `load(strokeData:)` from wiping ink when reselecting the same note.
+    private var loadedDrawingID: UUID? = nil
+    /// Regular (text) note currently shown in sketch mode. Stored per note so
+    /// switching away and back keeps the sketch open, while other notes keep
+    /// their normal text editor.
+    private var sketchNoteID: UUID? = nil
+    /// Toolbar button that opens / closes the inline sketch for a text note.
+    private var sketchButton: NSButton? = nil
+    /// Pending debounced save for a drawing note being edited.
+    private var pendingDrawingSave: UUID? = nil
+    /// Work item for the debounce timer.
+    private var drawingSaveWorkItem: DispatchWorkItem? = nil
     private var toolbarButtonSurfaces: [ObjectIdentifier: GlassSurfaceView] = [:]
+    /// Debounced store write for in-place note edits.
+    private var storeSaveWorkItem: DispatchWorkItem? = nil
     private var leftToolbarButtons: [NSButton] = []
     private var formattingToolbarButtons: [NSButton] = []
     private var rightToolbarButtons: [NSButton] = []
@@ -187,6 +224,8 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
                 inFolder = true
             } else if selectedFolder == "Canvas" {
                 inFolder = note.isCanvas
+            } else if selectedFolder == "Drawings" {
+                inFolder = note.isDrawing
             } else {
                 // A folder shows everything nested beneath it as well.
                 inFolder = note.folder == selectedFolder || note.folder.hasPrefix(selectedFolder + "/")
@@ -213,6 +252,14 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     private var detailFrame: NSRect {
         let detailTop: CGFloat = showsToolbar ? 68 : 12
         return NSRect(x: detailX, y: detailTop, width: detailWidth, height: max(0, bounds.height - detailTop - 8))
+    }
+
+    /// The page area below the title band. Drawing editors and the text editor
+    /// share it so the title is never covered by ink.
+    private var detailBodyFrame: NSRect {
+        let detailTop: CGFloat = showsToolbar ? 68 : 12
+        let bodyTop = detailTop + 24 + 40 + 10
+        return NSRect(x: detailX, y: bodyTop, width: detailWidth, height: max(0, bounds.height - bodyTop - 8))
     }
 
     override init(frame frameRect: NSRect) {
@@ -299,6 +346,14 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         for canvas in canvasViews.values {
             canvas.frame = NSRect(x: detailX, y: detailTop, width: detailWidth, height: max(0, bounds.height - detailTop - 8))
         }
+        // Drawing editors sit above the editor scroll so they show when a
+        // drawing note is selected and hide otherwise; the title band stays
+        // above the paper so the title never overlaps ink.
+        let drawBodyTop = bodyTop
+        let drawBodyHeight = bodyHeight
+        for view in drawingViews.values {
+            view.frame = NSRect(x: detailX, y: drawBodyTop, width: detailWidth, height: drawBodyHeight)
+        }
         layoutToolbar()
         layoutHUD()
     }
@@ -315,6 +370,8 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         toolbarContent.addSubview(folderHeader)
         leftToolbarButtons.append(addGlassToolbarButton("ellipsis", help: "More folder actions", action: #selector(openFolderActions)))
         newNoteButton = addGlassToolbarButton("square.and.pencil", help: "New Note", action: #selector(newNote))
+        let newDrawingButton = addGlassToolbarButton("scribble", help: "New Drawing", action: #selector(newDrawing))
+        leftToolbarButtons.append(newDrawingButton)
 
         let flexible = NSView()
         toolbarContent.addSubview(flexible)
@@ -327,6 +384,11 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
             addGlassToolbarButton("paperclip", help: "Attach a file", action: #selector(attachFile)),
             addGlassToolbarButton("arrow.down.doc", help: "Import Apple Notes", action: #selector(importAppleNotes))
         ]
+        // Sketch toggle for ordinary text notes; hidden unless one is selected.
+        let sketch = addGlassToolbarButton("pencil.tip.crop.circle", help: "Sketch on this note", action: #selector(toggleSketch))
+        sketchButton = sketch
+        formattingToolbarButtons.append(sketch)
+        setSketchControlVisible(false)
 
         // Canvas controls
         canvasControlButtons = [
@@ -407,7 +469,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         let leftGlass = leftToolbarButtons.compactMap(toolbarSurface(for:))
         let newNoteGlass = toolbarSurface(for: newNoteButton)
         let canvasGlass = canvasControlSurfaces.filter { !$0.isHidden }
-        let centerGlass = formattingToolbarButtons.compactMap(toolbarSurface(for:))
+        let centerGlass = formattingToolbarButtons.compactMap(toolbarSurface(for:)).filter { !$0.isHidden }
         let rightGlass = rightToolbarButtons.compactMap(toolbarSurface(for:))
 
         let searchWidth: CGFloat = min(280, max(180, bounds.width * 0.18))
@@ -552,7 +614,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     /// Pseudo folders that are not stored in `folders` and cannot be renamed,
     /// deleted, or used as a subfolder parent.
-    private static let reservedFolders: Set<String> = ["Notes", "Quick Notes", "All iCloud", "Canvas"]
+    private static let reservedFolders: Set<String> = ["Notes", "Quick Notes", "All iCloud", "Canvas", "Drawings"]
 
     /// Sidebar/toolbar label for a folder path: the last component, not the
     /// whole "LUOA/Science" path.
@@ -568,7 +630,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     /// True when notes can live directly in this selection ("Notes" included).
     private func canHoldNotes(_ path: String) -> Bool {
-        !["Quick Notes", "All iCloud", "Canvas"].contains(path)
+        !["Quick Notes", "All iCloud", "Canvas", "Drawings"].contains(path)
     }
 
     private func folderIsSelectedOrNested(_ folder: String, in path: String) -> Bool {
@@ -594,6 +656,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
             addFolderRow(folderDisplayName(folder), symbol: "folder", count: nil, folder: folder, indent: CGFloat(depth) * 12)
         }
         addFolderRow("Canvas", symbol: "scribble.variable", count: nil, folder: "Canvas")
+        addFolderRow("Drawings", symbol: "scribble", count: nil, folder: "Drawings")
         layoutFolderRows()
     }
 
@@ -808,7 +871,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     @objc private func createNormalNote() { createNote() }
 
     func createNote() {
-        if selectedFolder == "All iCloud" || selectedFolder == "Canvas" { selectedFolder = "Notes"; folderHeader.stringValue = folderDisplayName(selectedFolder) }
+        if ["All iCloud", "Canvas", "Drawings"].contains(selectedFolder) { selectedFolder = "Notes"; folderHeader.stringValue = folderDisplayName(selectedFolder) }
         let note = WorkspaceNote(title: "New Note", body: "", folder: selectedFolder)
         notes.append(note)
         notesTable.reloadData()
@@ -817,7 +880,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     @objc private func createCanvasNote() {
-        if selectedFolder == "All iCloud" || selectedFolder == "Canvas" {
+        if ["All iCloud", "Canvas", "Drawings"].contains(selectedFolder) {
             selectedFolder = "Notes"
             folderHeader.stringValue = folderDisplayName(selectedFolder)
             rebuildFolderRows()
@@ -826,6 +889,216 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         notes.append(note)
         notesTable.reloadData()
         selectNote(note.id)
+    }
+
+    @objc func newDrawing() {
+        if ["All iCloud", "Canvas", "Drawings"].contains(selectedFolder) {
+            selectedFolder = "Notes"
+            folderHeader.stringValue = folderDisplayName(selectedFolder)
+            rebuildFolderRows()
+        }
+        let note = WorkspaceNote(title: "New Drawing", body: "", folder: selectedFolder, isDrawing: true)
+        notes.append(note)
+        notesTable.reloadData()
+        selectNote(note.id)
+        if let dv = drawingViews[note.id] { dv.focusCanvas() }
+    }
+
+    // MARK: - Screenshot hooks
+
+    /// Selects the first drawing note so the ink surface can be captured.
+    func openFirstDrawingForTesting() {
+        NSLog("Notesy hook: drawings=%d", notes.filter { $0.isDrawing }.count)
+        guard let note = notes.first(where: { $0.isDrawing }) else { return }
+        revealForTesting(note)
+    }
+
+    /// Selects the first text note and opens its inline sketch.
+    func openSketchForTesting() {
+        guard let note = notes.first(where: { !$0.isCanvas && !$0.isDrawing }) else { return }
+        sketchNoteID = note.id
+        revealForTesting(note)
+    }
+
+    private func revealForTesting(_ note: WorkspaceNote) {
+        NSLog("Notesy hook: revealing %@ (drawing=%d, folder=%@, notes=%d)", note.title, note.isDrawing ? 1 : 0, note.folder, notes.count)
+        selectedFolder = note.folder
+        folderHeader.stringValue = folderDisplayName(selectedFolder)
+        rebuildFolderRows()
+        notesTable.reloadData()
+        selectNote(note.id)
+    }
+
+    /// Imports handwriting drawings from Apple Notes alongside any plain-text notes.
+    @objc func importDrawings() {
+        guard !isImportingNotes else { return }
+        isImportingNotes = true
+        showImportProgress()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var textNotes: [ImportedNote] = []
+            var drawError: Error?
+            do {
+                textNotes = try AppleNotesImporter.importAll()
+            } catch let e as AppleNotesImporterError {
+                drawError = e
+            } catch {
+                drawError = error
+            }
+            var drawings: [AppleNotesDrawings.ImportedDrawing] = []
+            if AppleNotesDrawings.isStoreReadable {
+                do {
+                    drawings = try AppleNotesDrawings.importAll()
+                } catch {
+                    if drawError == nil { drawError = error }
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isImportingNotes = false
+                self.hideImportProgress { [weak self] in
+                    guard let self else { return }
+                    self.flushAllPendingDrawings()
+                    self.mergeImportedNotes(textNotes)
+                    if let err = drawError {
+                        self.presentDrawingImportError(err)
+                        return
+                    }
+                    if drawings.isEmpty {
+                        self.presentDrawingImportResult(drawingsCount: 0, skipped: 0)
+                        return
+                    }
+                    self.importDrawingDrafts(drawings)
+                }
+            }
+        }
+    }
+
+    private func flushAllPendingDrawings() {
+        if let id = pendingDrawingSave {
+            saveDrawing(id: id)
+            pendingDrawingSave = nil
+            drawingSaveWorkItem = nil
+        }
+    }
+
+    private func importDrawingDrafts(_ drawings: [AppleNotesDrawings.ImportedDrawing]) {
+        var titles: [String: String] = [:]
+        var folders: [String: [String]] = [:]
+        for d in drawings {
+            let t = d.noteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { titles[d.noteID] = t }
+            if !d.noteFolderPath.isEmpty { folders[d.noteID] = d.noteFolderPath }
+        }
+        var alreadyImported = Set(notes.compactMap { $0.sourceID })
+        let existingDrawingIds = Set(notes.compactMap { $0.sourceID }.filter { $0.hasPrefix("apple-") })
+        alreadyImported.formUnion(existingDrawingIds)
+
+        do {
+            let drafts = try DrawingNoteImport.makeDrafts(
+                drawings: drawings,
+                titles: titles,
+                folders: folders,
+                alreadyImported: alreadyImported
+            )
+            isBatchingSave = true
+            var addedCount = 0
+            var skippedCount = 0
+            for draft in drafts {
+                let path = draft.folderPath.joined(separator: "/")
+                if draft.folderPath.count > 1 {
+                    var prefix: [String] = []
+                    for comp in draft.folderPath {
+                        prefix.append(comp)
+                        let p = prefix.joined(separator: "/")
+                        if folders[p] == nil { folders[p] = [] }
+                    }
+                }
+                let noteId = "apple-\(draft.sourceID)"
+                if notes.first(where: { $0.sourceID == noteId }) != nil {
+                    skippedCount += 1
+                    continue
+                }
+                let note = WorkspaceNote(
+                    title: draft.title,
+                    body: "",
+                    folder: path,
+                    isDrawing: true,
+                    sourceID: noteId,
+                    drawingFile: draft.imageFile
+                )
+                notes.append(note)
+                addedCount += 1
+            }
+            isBatchingSave = false
+            save()
+            rebuildFolderRows()
+            notesTable.reloadData()
+            presentDrawingImportResult(drawingsCount: addedCount, skipped: skippedCount)
+        } catch {
+            presentDrawingImportError(error)
+        }
+    }
+
+    private func presentDrawingImportResult(drawingsCount: Int, skipped: Int) {
+        var text = "Imported \(drawingsCount) drawing"
+        if drawingsCount != 1 { text += "s" }
+        if drawingsCount > 0 { text += "." }
+        if skipped > 0 { text += " Skipped \(skipped) that were already imported." }
+        let alert = NSAlert()
+        alert.messageText = "Import Complete"
+        alert.informativeText = text
+        alert.addButton(withTitle: "OK")
+        presentImportAlert(alert)
+    }
+
+    private func presentDrawingImportError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Import Failed"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        presentImportAlert(alert)
+    }
+
+    /// Single-drag-and-drop or menu-driven import of drawing image files.
+    @objc func importDrawingFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff, .gif, .bmp]
+        let ok = panel.runModal() == .OK
+        guard ok, let rawUrls = (panel as AnyObject).value(forKey: "urls") as? [URL], !rawUrls.isEmpty else { return }
+        let urls = rawUrls
+        var created: [WorkspaceNote] = []
+        var failed: [URL] = []
+        for url in urls {
+            guard let img = NSImage(contentsOf: url) else {
+                failed.append(url)
+                continue
+            }
+            let name = "import-\(UUID().uuidString.lowercased()).png"
+            guard let storedName = try? DrawingMedia.storePNG(image: img, name: name) else {
+                failed.append(url)
+                continue
+            }
+            let folderPath = (["All iCloud", "Canvas", "Drawings"].contains(selectedFolder)) ? "Notes" : selectedFolder
+            let note = WorkspaceNote(title: url.deletingPathExtension().lastPathComponent,
+                                     body: "", folder: folderPath,
+                                     isDrawing: true, drawingFile: storedName)
+            notes.append(note)
+            created.append(note)
+        }
+        if !failed.isEmpty {
+            let names = failed.map { $0.lastPathComponent }.joined(separator: ", ")
+            let alert = NSAlert()
+            alert.messageText = "Some files could not be imported"
+            alert.informativeText = "The following files were not recognized as images: \(names)"
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+        if !created.isEmpty {
+            notesTable.reloadData()
+            selectNote(created[0].id)
+        }
     }
 
     @objc private func searchChanged() {
@@ -1146,9 +1419,18 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     @objc private func deleteSelectedNote() {
-        guard let selectedNoteID else { return }
-        canvasViews.removeValue(forKey: selectedNoteID)?.removeFromSuperview()
-        notes.removeAll { $0.id == selectedNoteID }
+        guard let id = selectedNoteID else { return }
+        canvasViews.removeValue(forKey: id)?.removeFromSuperview()
+        drawingViews.removeValue(forKey: id)?.removeFromSuperview()
+        // Clean up drawing media files (drawing notes and text notes that carry
+        // an inline sketch both store sidecars).
+        if let note = notes.first(where: { $0.id == id }) {
+            if let f = note.drawingFile { DrawingMedia.remove(f) }
+            if let p = note.drawingPreviewFile { DrawingMedia.remove(p) }
+            if let s = note.drawingStrokeFile { DrawingMedia.removeStrokeFile(s) }
+        }
+        if sketchNoteID == id { sketchNoteID = nil }
+        notes.removeAll { $0.id == id }
         self.selectedNoteID = nil
         notesTable.reloadData()
         if let first = visibleNotes.first { selectNote(first.id) } else { showEmptyEditor() }
@@ -1170,6 +1452,62 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
 
 
     private var selectedNote: WorkspaceNote? { notes.first { $0.id == selectedNoteID } }
+
+    /// Loads the sidecar stroke data for a note, or nil when there is none.
+    private func loadingStrokeData(_ note: WorkspaceNote) -> Data? {
+        guard let fname = note.drawingStrokeFile else { return nil }
+        return DrawingMedia.strokeData(for: fname)
+    }
+
+    private func drawingView(for note: WorkspaceNote) -> DrawingEditorView {
+        if let existing = drawingViews[note.id] { return existing }
+        let view = DrawingEditorView(frame: detailBodyFrame)
+        view.configure(theme: theme)
+        view.onDrawingChanged = { [weak self] in self?.scheduleDrawingSave(id: note.id) }
+        drawingViews[note.id] = view
+        view.isHidden = true
+        addSubview(view)
+        needsLayout = true
+        return view
+    }
+
+    // MARK: - Sketching on a text note
+
+    private func setSketchControlVisible(_ visible: Bool) {
+        sketchButton?.isHidden = !visible
+        if let sketchButton { toolbarSurface(for: sketchButton)?.isHidden = !visible }
+    }
+
+    private func updateSketchControl(for note: WorkspaceNote?) {
+        guard let note, !note.isCanvas, !note.isDrawing else {
+            setSketchControlVisible(false)
+            return
+        }
+        setSketchControlVisible(true)
+        let sketching = sketchNoteID == note.id
+        sketchButton?.image = NSImage(
+            systemSymbolName: sketching ? "text.alignleft" : "pencil.tip.crop.circle",
+            accessibilityDescription: sketching ? "Back to text" : "Sketch on this note"
+        )
+        sketchButton?.toolTip = sketching ? "Back to text" : "Draw on this note"
+    }
+
+    /// Opens the handwriting surface on an ordinary text note, or returns it to
+    /// the text editor. The ink is stored in the same sidecar as a drawing note,
+    /// so a note can hold text and a sketch at the same time.
+    @objc func toggleSketch() {
+        guard let note = selectedNote, !note.isCanvas, !note.isDrawing else { return }
+        if sketchNoteID == note.id {
+            flushDrawingSave(id: note.id)
+            sketchNoteID = nil
+        } else {
+            sketchNoteID = note.id
+        }
+        needsLayout = true
+        selectNote(note.id)
+        notesTable.reloadData()
+        layoutToolbar()
+    }
 
     private func canvasView(for note: WorkspaceNote) -> WorkspaceScrollView {
         if let existing = canvasViews[note.id] { return existing }
@@ -1198,6 +1536,61 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         notes[index].canvasBlocks = canvas.exportBlocks()
         notes[index].connections = canvas.connections
         notes[index].modified = Date()
+        scheduleStoreSave()
+    }
+
+    /// Debounced persistence: waits 0.7s after the last ink change before writing.
+    private func scheduleDrawingSave(id: UUID) {
+        // Cancel any previous pending save for a different note.
+        drawingSaveWorkItem?.cancel()
+        pendingDrawingSave = id
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingDrawingSave = nil
+            self.saveDrawing(id: id)
+        }
+        drawingSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
+    }
+
+    private func saveDrawing(id: UUID) {
+        guard let index = notes.firstIndex(where: { $0.id == id }),
+              let dv = drawingViews[id] else { return }
+        // A drawing that was erased back to empty must stop loading its old ink.
+        guard !dv.isEmpty else {
+            if let strokeName = notes[index].drawingStrokeFile {
+                DrawingMedia.removeStrokeFile(strokeName)
+                notes[index].drawingStrokeFile = nil
+            }
+            if let previewName = notes[index].drawingPreviewFile {
+                DrawingMedia.remove(previewName)
+                notes[index].drawingPreviewFile = nil
+            }
+            notes[index].modified = Date()
+            scheduleStoreSave()
+            return
+        }
+        // Flush strokes to sidecar.
+        if let strokeName = try? DrawingMedia.storeStrokeData(dv.strokeData, noteID: id) {
+            notes[index].drawingStrokeFile = strokeName
+        }
+        // Render a small preview thumbnail for the list.
+        if let thumb = dv.thumbnail(size: NSSize(width: 320, height: 240)) {
+            if let previewName = try? DrawingMedia.storePNG(image: thumb, name: "preview-\(id)") {
+                notes[index].drawingPreviewFile = previewName
+            }
+        }
+        notes[index].modified = Date()
+        scheduleStoreSave()
+    }
+
+    /// Force-flush a pending debounce so switching away from a drawing does not
+    /// lose uncommitted ink.
+    private func flushDrawingSave(id: UUID) {
+        drawingSaveWorkItem?.cancel()
+        drawingSaveWorkItem = nil
+        pendingDrawingSave = nil
+        saveDrawing(id: id)
     }
 
     private func selectNote(_ id: UUID) {
@@ -1212,8 +1605,28 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         editor.string = note.body
         isUpdatingEditor = false
         setCanvasControlsVisible(note.isCanvas)
+        updateSketchControl(for: note)
         layoutToolbar()
-        if note.isCanvas {
+        if note.isDrawing || sketchNoteID == id {
+            let sketching = !note.isDrawing
+            let dv = drawingView(for: note)
+            // A drawing note is its own sheet; a sketch on a text note has to
+            // leave the page showing so ink lands on top of the words.
+            dv.showsPaper = !sketching
+            dv.configure(theme: theme)
+            dv.noteIdentity = id
+            dv.load(strokeData: loadingStrokeData(note), imageFile: note.drawingFile)
+            loadedDrawingID = id
+            for (canvasID, view) in canvasViews { view.isHidden = true }
+            pageCard.isHidden = !sketching
+            titleField.isHidden = false
+            editorScroll.isHidden = !sketching
+            zoomHUD.isHidden = true
+            zoomHUD.removeFromSuperview()
+            for view in drawingViews.values { view.isHidden = view !== dv }
+            dv.isHidden = false
+            dv.window?.makeFirstResponder(dv.canvas)
+        } else if note.isCanvas {
             let selectedCanvas = canvasView(for: note)
             for (canvasID, view) in canvasViews { view.isHidden = canvasID != id }
             pageCard.isHidden = true
@@ -1227,6 +1640,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
             layoutHUD()
         } else {
             for canvas in canvasViews.values { canvas.isHidden = true }
+            for view in drawingViews.values { view.isHidden = true }
             pageCard.isHidden = false
             titleField.isHidden = false
             editorScroll.isHidden = false
@@ -1236,7 +1650,6 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     }
 
     private func showEmptyEditor() {
-        
         selectedNoteID = nil
         titleField.stringValue = ""
         editor.string = ""
@@ -1246,6 +1659,9 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         zoomHUD.isHidden = true
         setCanvasControlsVisible(false)
         for canvas in canvasViews.values { canvas.isHidden = true }
+        for view in drawingViews.values { view.isHidden = true }
+        loadedDrawingID = nil
+        setSketchControlVisible(false)
     }
 
     /// Hide the glass as well as its hosted button. Hiding only the button
@@ -1273,7 +1689,16 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         date.font = .systemFont(ofSize: 11)
         date.textColor = effectiveTheme.textSecondary
         
-        let previewText = note.isCanvas ? "Canvas · \(note.canvasBlocks.count) cards" : note.body.replacingOccurrences(of: "\n", with: " ")
+        let previewText: String
+        if note.isDrawing {
+            previewText = note.drawingStrokeFile == nil && note.drawingFile != nil ? "Imported drawing" : "Drawing"
+        } else if note.isCanvas {
+            previewText = "Canvas · \(note.canvasBlocks.count) cards"
+        } else if note.drawingStrokeFile != nil {
+            previewText = "Sketch · " + note.body.replacingOccurrences(of: "\n", with: " ")
+        } else {
+            previewText = note.body.replacingOccurrences(of: "\n", with: " ")
+        }
         let preview = NSTextField(labelWithString: previewText)
         preview.font = .systemFont(ofSize: 11)
         preview.textColor = effectiveTheme.textSecondary
@@ -1301,6 +1726,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         guard !isUpdatingEditor, let id = selectedNoteID, let index = notes.firstIndex(where: { $0.id == id }) else { return }
         notes[index].body = editor.string
         notes[index].modified = Date()
+        scheduleStoreSave()
     }
 
     func textDidEndEditing(_ notification: Notification) {
@@ -1321,6 +1747,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         if notes[index].isCanvas, let firstCard = canvasViews[id]?.canvasView.cards.first?.1 {
             firstCard.title = titleField.stringValue
         }
+        scheduleStoreSave()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -1398,6 +1825,33 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         return nil
     }
 
+    /// Coalesces in-place note edits into one atomic store write. Mutating
+    /// `notes[index]` does not fire `notes`'s `didSet`, so typing a note body
+    /// or title never reached disk until an unrelated structural change.
+    private func scheduleStoreSave() {
+        guard !isRestoring, !isBatchingSave else { return }
+        storeSaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.storeSaveWorkItem = nil
+            self?.save()
+        }
+        storeSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    /// Writes everything pending: used when the app quits or the window closes.
+    func flushPendingSaves() {
+        storeSaveWorkItem?.cancel()
+        storeSaveWorkItem = nil
+        drawingSaveWorkItem?.cancel()
+        drawingSaveWorkItem = nil
+        if let id = pendingDrawingSave {
+            pendingDrawingSave = nil
+            saveDrawing(id: id)
+        }
+        save()
+    }
+
     private func save() {
         guard !isRestoring, !isBatchingSave, isViewLoaded else { return }
         let data = try? JSONEncoder().encode(SavedNotes(notes: notes, folders: folders))
@@ -1411,7 +1865,7 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
     // MARK: - Public menu actions
 
     func newCanvas() {
-        if selectedFolder == "All iCloud" || selectedFolder == "Canvas" {
+        if ["All iCloud", "Canvas", "Drawings"].contains(selectedFolder) {
             selectedFolder = "Notes"
             folderHeader.stringValue = folderDisplayName(selectedFolder)
             rebuildFolderRows()
@@ -1569,6 +2023,10 @@ final class NotesWorkspaceView: NSView, NSTableViewDataSource, NSTableViewDelega
         // Update canvas views
         for canvas in canvasViews.values {
             canvas.backgroundColor = effectiveTheme.contentBackground
+        }
+        // Drawing editors keep their own paper + palette in step with the theme.
+        for drawing in drawingViews.values {
+            drawing.configure(theme: effectiveTheme)
         }
         
         // Force redraw
