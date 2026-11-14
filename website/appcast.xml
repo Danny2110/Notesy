@@ -6,6 +6,26 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.1.0</title>
+      <pubDate>Sat, 14 Nov 2026 21:21:57 +0000</pubDate>
+      <sparkle:version>310</sparkle:version>
+      <sparkle:shortVersionString>3.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.1.0
+
+One file, one shortcut, no launch hang.
+
+Highlights
+• Drawings live inside Notes.nty — every save embeds the ink and preview images in the encrypted library, so your iCloud folder holds exactly one file. You can delete the old Media folder; nothing is lost. On launch the drawings are read back out of the file, and an exported library stays fully self-contained.
+• Save with ⌘S — File → Save writes the library immediately instead of waiting for the half-second autosave. Autosave still runs, so nothing depends on remembering to press it.
+• Launch no longer hangs — the app stopped asking the login keychain for its key before the window opens. A stuck approval dialog could leave Notesy "not responding" forever; the key now lives in a private, non-synced file in Application Support. The window appears in about 0.4 seconds.
+• A locked library can't be overwritten — if the key is ever missing, Notesy opens read-only with an inline notice and refuses to write, rather than minting a new key over your notes.
+• Settings fixes — "Color Theme" sits above the theme grid again, every pane lays out top-down, and the clipped descriptions and overlapping buttons in Apple Notes, Updates and Library & Backup are gone.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.1.0/Notesy.app.zip" length="3685403" type="application/octet-stream" sparkle:edSignature="/beQwj4gIqaBpJrgX1khH7sGgmTE4ssaYUZqqYA6gbrh4LHjUbCS1b1x3rV0XyWnY19raLeTo1QwOXJe1T9OAg=="/>
+    </item>
+    <item>
       <title>Notesy 3.0.0</title>
       <pubDate>Fri, 13 Nov 2026 17:26:28 +0000</pubDate>
       <sparkle:version>300</sparkle:version>
