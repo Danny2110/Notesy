@@ -6,6 +6,22 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.3.0</title>
+      <pubDate>Mon, 16 Nov 2026 18:06:40 +0000</pubDate>
+      <sparkle:version>330</sparkle:version>
+      <sparkle:shortVersionString>3.3.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.3.0
+
+Quick-switcher toggle fix and a visible Empty Trash command.
+
+Highlights
+• Quick Switcher (⌘O) now toggles — press it once to open, again to close. No more stuck panels.
+• File → Empty Trash… is now a real menu item, so you can purge the Trash from anywhere without hunting for a toolbar button. The existing toolbar button also shows correctly when you are viewing Trash.
+• Emptying trash now saves immediately, so deletions survive a crash between the alert and the next save cycle.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.3.0/Notesy.app.zip" length="5739069" type="application/octet-stream" sparkle:edSignature="RqpX5s/oJRQykB885l88iUyH8xv3N5SUHZjxomZOD90C1zF9V2t4+WaiTACV/QAxDJJpUg6Sjh54CGeiAewLCQ=="/>
+    </item>
+    <item>
       <title>Notesy 3.2.0</title>
       <pubDate>Mon, 16 Nov 2026 12:00:26 +0000</pubDate>
       <sparkle:version>320</sparkle:version>
