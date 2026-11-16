@@ -6,6 +6,32 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.2.0</title>
+      <pubDate>Mon, 16 Nov 2026 12:00:26 +0000</pubDate>
+      <sparkle:version>320</sparkle:version>
+      <sparkle:shortVersionString>3.2.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.2.0
+
+Harder to lose a note, and friendlier when a library arrives from somewhere else.
+
+Highlights
+• Your edits can no longer vanish silently — if a write fails (disk full, folder missing, iCloud unavailable) the window says so and keeps saying it until a save succeeds, with a Try Again button. Quitting with an unwritten change asks first instead of dropping it.
+• Daily encrypted snapshots — the last 7 days of Notes.nty are kept in Application Support/Notesy/Backups, so a bad edit or a damaged file costs a day, not a library. Importing or merging takes its own backup first, and those one-offs never use up a daily slot.
+• Two Macs no longer fight — when iCloud leaves a second copy behind ("Notes 2.nty"), Notesy notices it at launch and offers to merge. The newer edit of a shared note wins, notes only in one copy are kept, nothing is deleted, and the old copy is archived in Backups before the merge.
+• Open a .nty from Finder, or drag one onto the window — an exported library merges into the open library after a confirmation that says how many notes are new. Password-protected files ask for the password, and the current library is backed up first.
+• Window and selection come back — size, position, the folder you were in and the note you had open are restored on launch.
+• ⌘S now confirms with "✓ Saved", and File → Save is disabled while a locked read-only library is open.
+• Drag and drop — drop images onto the window to create drawing notes, drag notes onto a folder or onto Trash.
+• An unchanged save is skipped — quitting without editing leaves Notes.nty byte-identical, so iCloud stops re-uploading 1.5 MB for nothing.
+• Protected by tests — 12 unit tests cover merging, backup rotation, iCloud copy detection, and the refuse-to-overwrite-newer-notes rule.
+
+Also fixed: a fresh Mac could not create its first library (the encryption path asked for a key only the "no library yet" path could mint).
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications. Existing libraries open unchanged.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.2.0/Notesy.app.zip" length="3739733" type="application/octet-stream" sparkle:edSignature="kAR4C3g2GGvZc+eVG4uDSKtzJmBdKgpzrTNAr99xQiWQhNlOloL1rIHfRDkOqG39AiB09uAnqyfioGpHAJhpCw=="/>
+    </item>
+    <item>
       <title>Notesy 3.1.0</title>
       <pubDate>Sat, 14 Nov 2026 21:21:57 +0000</pubDate>
       <sparkle:version>310</sparkle:version>
