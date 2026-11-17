@@ -1,7 +1,4 @@
 Notesy
 
-Explore the interactive website: [danny2110.github.io/Notesy](https://danny2110.github.io/Notesy/)
-
-A quiet place for notes and ideas with the goal of replacing your default notes app.<img width="1281" height="850" alt="Screenshot 2026-11-04 at 5 52 25 PM" src="https://github.com/user-attachments/assets/cdda05b1-799a-4ffb-b61d-69e7a29e8253" />
-.
-<img width="1279" height="848" alt="Screenshot 2026-11-04 at 5 49 40 PM" src="https://github.com/user-attachments/assets/14866ee5-171b-440d-8477-8931d0067cfe" />
+Explore the interactive [website](https://danny2110.github.io/Notesy/)
+<img width="820" height="386" alt="Screenshot 2026-11-17 at 8 14 22 AM" src="https://github.com/user-attachments/assets/93737863-77d2-4791-a6ce-3b913c9aa7c9" />
