@@ -6,6 +6,34 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.5.0</title>
+      <pubDate>Tue, 17 Nov 2026 16:56:16 +0000</pubDate>
+      <sparkle:version>350</sparkle:version>
+      <sparkle:shortVersionString>3.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.5.0
+
+Drawings you can roam, and buttons that do things.
+
+Highlights
+• Scrollable, zoomable drawings — a drawing note is now a fixed page (1600×2200 for new ones) inside a real scroll view. Two-finger scroll pans, pinch or ⌘-scroll zooms from 25% to 400% around the pointer. The page stays put when you resize the window, and only the visible slice is rendered, so big pages stay light.
+• Buttons on notes — put a clickable button above a note's text. Each one opens a note, opens a URL, or runs an app action: New Note, New Drawing, New Canvas, Feature Canvas, Quick Switcher, Search, Next Note, Previous Note. Add one with Edit → Insert Button… (⇧⌘B), or right-click a button to run, edit or remove it.
+• Buttons on canvases — any canvas card can carry a button instead of a link, with the same actions. Right-click a card → Add Button…; the card's title line says what the action does and the button carries the label.
+• Buttons are stored, not typed — a button is data in the library, so it can't be half-typed, it survives saving and reloading, and a library written by a newer Notesy still opens (an unknown action falls back instead of failing).
+
+Also fixed
+• Quick Switcher's menu shortcut reads ⌘O again, and still toggles open and closed.
+• Focus Mode moved to ⌘⇧F, so ⌘F is Find again.
+• Removed a duplicated "Copy as Rich Text" item and a doubled separator above "Empty Trash…".
+• Checklist boxes and [[wikilinks]] now respond where you point — clicks account for the text container's inset.
+• Locking a note refreshes the page immediately, and right-click → Lock on an unselected row selects it first.
+• Colour labels: dots draw in the note list, and right-click → Color sets red, orange, yellow, green, blue or purple.
+• Locked notes keep their text out of search, Spotlight, backlinks, tags and the Quick Switcher; titles stay searchable.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications. Existing libraries open unchanged.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.5.0/Notesy.app.zip" length="3893543" type="application/octet-stream" sparkle:edSignature="AEQPXrO59aUX43JGJW6NceyxE9WU20CSNWcAEZ5Wl9l0CmHh6DcsUFgVLYCndq/eOVE+zDWGIkOSmewr7Tz9Dw=="/>
+    </item>
+    <item>
       <title>Notesy 3.3.0</title>
       <pubDate>Mon, 16 Nov 2026 18:06:40 +0000</pubDate>
       <sparkle:version>330</sparkle:version>
