@@ -6,6 +6,32 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.6.0</title>
+      <pubDate>Wed, 18 Nov 2026 20:35:19 +0000</pubDate>
+      <sparkle:version>360</sparkle:version>
+      <sparkle:shortVersionString>3.6.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.6.0
+
+Searches you can keep, a real find bar, and an outline.
+
+Highlights
+• Saved searches — a search worth keeping can now be saved and re-run. They sit in a SEARCHES section of the sidebar: click one to run it, right-click to rename or remove, and the search field's menu lists them too. A saved search scopes the whole library, so it finds notes in folders you aren't looking at; picking a folder or a tag, or typing a different query, returns you to what you were doing. They are stored in the library and survive merging two libraries by name.
+• Search operators — the search field now understands `#tag`, `in:folder`, `is:locked`, `is:unlocked`, `has:drawing` and `is:canvas`, and mixes them with words. `in:` reaches into a folder without changing the selected one.
+• Find in Note (⌥⌘F) — a find strip over the page with every match highlighted, the current one in orange, and "3 of 12" as you go. ⌘G and ⇧⌘G step, and the search starts from the selected text, like every other Mac app. Find and Replace (⇧⌥⌘F) adds a replace row; Replace All is one undoable edit, so ⌘Z puts the whole note back.
+• Find Next/Previous — ⌘G and ⇧⌘G work even when the strip is closed, and reopen it with the last query.
+• Outline — View ▸ Outline (⌥⌘O) or the new toolbar button lists this note's headings, indented by level, and clicking one jumps to it. It reads what people already type: `#` heading lines, a line underlined with `===` or `---`, and short ALL-CAPS lines, which is what the built-in templates use.
+
+Also fixed
+• Quick Switcher (⌘O) no longer disappears behind an open canvas. Canvas pages are created the first time you open them and were landing on top of the panel; the panel and the find bar now always stay above the page.
+• The Quick Switcher and the find bar paint a near-opaque reading surface, so result rows and match counts stay readable over text, ink and paper.
+• Find, Find and Replace, Find Next/Previous and Outline grey out for canvas, drawing and locked notes instead of beeping at them.
+• The find bar closes when you switch notes or the library locks, rather than highlighting the same offsets in a different note.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications. Existing libraries open unchanged.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.6.0/Notesy.app.zip" length="3975311" type="application/octet-stream" sparkle:edSignature="/segdSJcqSzFntJJYRxt35ekDAJrScWUt3/NgXCwAk/ynaFG99aWuXktowBnD6dp7sPF+egyYuXmI08lQLzbBQ=="/>
+    </item>
+    <item>
       <title>Notesy 3.5.0</title>
       <pubDate>Tue, 17 Nov 2026 16:56:16 +0000</pubDate>
       <sparkle:version>350</sparkle:version>
