@@ -6,6 +6,30 @@
     <description>Notesy releases</description>
     <language>en</language>
     <item>
+      <title>Notesy 3.7.0</title>
+      <pubDate>Tue, 24 Nov 2026 16:07:29 +0000</pubDate>
+      <sparkle:version>370</sparkle:version>
+      <sparkle:shortVersionString>3.7.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Notesy v3.7.0
+
+Canvas notes export now.
+
+Highlights
+• Export a canvas as PDF — File ▸ Export ▸ PDF… now writes a canvas instead of refusing it. The whole board goes on one page: your cards at their real positions and sizes, titles, wrapped bodies, button pills, image cards and the connecting arrows, under the note's title. Wide boards get a landscape sheet, and the page is sized to the board so the text stays vector-sharp when you zoom.
+• Print a canvas — File ▸ Print… prints the same sheet, scaled to fit the paper.
+• Export a canvas as an image — File ▸ Export ▸ Image as PNG… (previously "Drawing as PNG…") now handles canvases as well as drawings, rendering the board at 2× for a crisp picture to drop into a message or a slide.
+• Canvas as text — File ▸ Export ▸ Markdown… and Plain Text… turn a canvas into its cards in reading order, with each card as a heading in Markdown, so a board can be pasted into a document or an email.
+• The export is drawn from the stored cards rather than a screenshot, so it matches the board whether or not the canvas is open, includes cards scrolled out of view, and prints black text on white paper instead of glass on a dotted grid.
+• A card with an image prints the image, washed back so the text over it stays readable.
+
+Also fixed
+• PDF export of an ordinary note still comes out one page; the paper size and orientation handling now accounts for landscape sheets correctly.
+
+Requires macOS 14 or later. Unzip and move Notesy.app to Applications. Existing libraries open unchanged.]]></description>
+      <enclosure url="https://github.com/Danny2110/Notesy/releases/download/v3.7.0/Notesy.app.zip" length="3993947" type="application/octet-stream" sparkle:edSignature="zaYnzZ9c2TsSJM8VJUydgW7ZyeL/EsUrlDd2SrOFRbuFvdvU43jk7rvHPBk0qdMfEcJ3loBfIbwlQJyRoJ8gBg=="/>
+    </item>
+    <item>
       <title>Notesy 3.6.0</title>
       <pubDate>Wed, 18 Nov 2026 20:35:19 +0000</pubDate>
       <sparkle:version>360</sparkle:version>
